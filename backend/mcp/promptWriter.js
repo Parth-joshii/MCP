@@ -10,7 +10,7 @@ const typoReplacements = [
   [/\bprodcut\b|\bprdct\b/gi, 'product'],
   [/\bcust\b|\bcustmer\b|\bcoustomer\b/gi, 'customer'],
   [/\bacct\b|\baccnt\b/gi, 'account'],
-  [/\btxn\b|\btrxn\b/gi, 'transaction'],
+  [/\btxn\b(?![-_\s]*\d)|\btrxn\b/gi, 'transaction'],
   [/\bamt\b/gi, 'amount'],
   [/\bbal\b/gi, 'balance'],
   [/\bcoloumn\b|\bcloumn\b|\bcolmn\b/gi, 'column'],

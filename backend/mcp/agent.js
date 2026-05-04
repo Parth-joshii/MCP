@@ -181,6 +181,23 @@ const labelTokens = (value = '') => normalizeLabel(value)
   .filter(Boolean)
   .map(singularizeToken);
 
+const genericFieldTokens = new Set([
+  'code',
+  'date',
+  'id',
+  'name',
+  'number',
+  'status',
+  'type',
+  'value'
+]);
+
+const meaningfulTokenOverlap = (candidateTokens = [], fieldTokens = []) => {
+  const meaningful = candidateTokens.filter((token) => !genericFieldTokens.has(token));
+  if (meaningful.length === 0) return true;
+  return meaningful.some((token) => fieldTokens.includes(token));
+};
+
 const findFieldByLabel = (fields = [], candidate) => {
   const normalizedCandidate = normalizeLabel(candidate);
   const compactCandidate = compactLabel(candidate);
@@ -195,6 +212,11 @@ const findFieldByLabel = (fields = [], candidate) => {
   const contains = fields.find((field) => {
     const normalizedField = normalizeLabel(field);
     const compactField = compactLabel(field);
+    const fieldTokens = labelTokens(field);
+    const candidateTokens = labelTokens(candidate);
+    const fieldOnlyGeneric = fieldTokens.length > 0 && fieldTokens.every((token) => genericFieldTokens.has(token));
+    const candidateHasMeaningful = candidateTokens.some((token) => !genericFieldTokens.has(token));
+    if (fieldOnlyGeneric && candidateHasMeaningful) return false;
     return (
       normalizedField.includes(normalizedCandidate) ||
       normalizedCandidate.includes(normalizedField) ||
@@ -212,9 +234,15 @@ const findFieldByLabel = (fields = [], candidate) => {
       const fieldTokens = labelTokens(field);
       const overlap = candidateTokens.filter((token) => fieldTokens.includes(token)).length;
       const score = overlap / Math.max(candidateTokens.length, 1);
-      return { field, overlap, score, fieldTokenCount: fieldTokens.length };
+      return {
+        field,
+        overlap,
+        score,
+        fieldTokenCount: fieldTokens.length,
+        meaningfulOverlap: meaningfulTokenOverlap(candidateTokens, fieldTokens)
+      };
     })
-    .filter((item) => item.overlap > 0 && (item.score >= 0.5 || item.overlap === candidateTokens.length))
+    .filter((item) => item.meaningfulOverlap && item.overlap > 0 && (item.score >= 0.5 || item.overlap === candidateTokens.length))
     .sort((a, b) => b.score - a.score || a.fieldTokenCount - b.fieldTokenCount)[0]?.field || null;
 };
 
@@ -252,9 +280,10 @@ const fieldMatchQuality = (fields = [], candidate) => {
       const fieldTokens = labelTokens(field);
       const overlap = candidateTokens.filter((token) => fieldTokens.includes(token)).length;
       const ratio = overlap / Math.max(candidateTokens.length, 1);
+      const hasMeaningfulOverlap = meaningfulTokenOverlap(candidateTokens, fieldTokens);
       return {
         field,
-        score: overlap > 0 && (ratio >= 0.5 || overlap === candidateTokens.length)
+        score: hasMeaningfulOverlap && overlap > 0 && (ratio >= 0.5 || overlap === candidateTokens.length)
           ? Math.round(40 + ratio * 20)
           : 0
       };
@@ -268,7 +297,7 @@ const fieldMatchQuality = (fields = [], candidate) => {
 const extractDatabaseRequestedField = (query, fields = []) => {
   const normalized = normalizeLabel(query);
   const phraseMatch = normalized.match(
-    /^(?:what is|what are|whats|which|show|show me|tell me|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|by|where|when|with|from|in|on)\s+|$)/
+    /^(?:what is|what are|whats|which|show|show me|tell me|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|by|where|when|with|whose|that|which|from|in|on)\s+|$)/
   );
   const fieldFromPhrase = findFieldByLabel(fields, phraseMatch?.[1]);
   if (fieldFromPhrase) return fieldFromPhrase;
@@ -294,12 +323,12 @@ const entityRequestedFieldHints = [
   { pattern: /\b(accounts?)\b/, labels: ['account_id', 'account id', 'account_name', 'account name'] },
   { pattern: /\b(orders?)\b/, labels: ['order_id', 'order id'] },
   { pattern: /\b(transactions?)\b/, labels: ['transaction_id', 'transaction id'] },
-  { pattern: /\b(matches?)\b/, labels: ['match_id', 'match id'] }
+  { pattern: /\bmatches?(?!\s+played)\b/, labels: ['match_id', 'match id'] }
 ];
 
 const inferDatabaseEntityRequestedFields = (query, fields = []) => {
   const normalized = normalizeLabel(query);
-  const isEntityQuestion = /\b(who|which|what|show|list|find|get|provide|give)\b/.test(normalized);
+  const isEntityQuestion = /\b(who|which|what|show|list|find|get|provide|give|how many|count|number of)\b/.test(normalized);
   if (!isEntityQuestion) return [];
 
   const inferred = [];
@@ -324,7 +353,9 @@ const inferDatabaseEntityRequestedFields = (query, fields = []) => {
 
 const implicitFilterStopWords = new Set([
   'the', 'a', 'an', 'this', 'that', 'selected', 'database', 'document', 'record',
-  'row', 'rows', 'table', 'collection', 'details', 'detail', 'info', 'information'
+  'row', 'rows', 'table', 'collection', 'details', 'detail', 'info', 'information',
+  'account', 'accounts', 'client', 'clients', 'customer', 'customers', 'order', 'orders',
+  'player', 'players', 'transaction', 'transactions', 'user', 'users'
 ]);
 
 const cleanImplicitFilterValue = (value = '') => normalizeLabel(value)
@@ -333,8 +364,28 @@ const cleanImplicitFilterValue = (value = '') => normalizeLabel(value)
   .join(' ')
   .trim();
 
-const findImplicitIdentifierField = (fields = [], requestedFields = []) => {
+const findImplicitIdentifierField = (fields = [], requestedFields = [], contextPhrase = '') => {
   const requested = new Set(requestedFields.filter(Boolean));
+  const context = normalizeLabel(contextPhrase);
+  const contextualCandidates = [
+    { pattern: /\baccounts?\b/, labels: ['account_id', 'account id', 'account_name', 'account name'] },
+    { pattern: /\bclients?\b|\bcustomers?\b/, labels: ['customer_name', 'customer name', 'name'] },
+    { pattern: /\bmatches?\b/, labels: ['match_id', 'match id'] },
+    { pattern: /\borders?\b/, labels: ['order_id', 'order id'] },
+    { pattern: /\bplayers?\b/, labels: ['player_name', 'player name', 'name'] },
+    { pattern: /\bteams?\b/, labels: ['team_name', 'team name', 'name'] },
+    { pattern: /\btransactions?\b|\btxn\b/, labels: ['transaction_id', 'transaction id'] },
+    { pattern: /\busers?\b/, labels: ['user_name', 'user name', 'name'] }
+  ];
+
+  for (const candidateGroup of contextualCandidates) {
+    if (!candidateGroup.pattern.test(context)) continue;
+    for (const label of candidateGroup.labels) {
+      const field = findFieldByLabel(fields, label);
+      if (field && !requested.has(field)) return field;
+    }
+  }
+
   const candidates = [
     'player_name',
     'player name',
@@ -372,9 +423,6 @@ const extractImplicitEntityFilters = (query, fields = [], requestedFields = []) 
   if (!/\b(of|for|about|by|named|called)\b/.test(normalized)) return [];
 
   const requested = requestedFields.filter(Boolean);
-  const identifierField = findImplicitIdentifierField(fields, requested);
-  if (!identifierField) return [];
-
   const patterns = [
     /\b(?:of|for|about|by)\s+(?:the\s+)?(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/,
     /\b(?:named|called)\s+(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/
@@ -382,7 +430,10 @@ const extractImplicitEntityFilters = (query, fields = [], requestedFields = []) 
 
   for (const pattern of patterns) {
     const match = normalized.match(pattern);
-    const value = cleanImplicitFilterValue(match?.[1] || '');
+    const rawValue = match?.[1] || '';
+    const identifierField = findImplicitIdentifierField(fields, requested, rawValue);
+    if (!identifierField) return [];
+    const value = cleanImplicitFilterValue(rawValue);
     if (!value) continue;
     if (findFieldByLabel(fields, value)) continue;
     if (requested.some((field) => normalizeLabel(field) === value)) continue;
@@ -424,6 +475,7 @@ const cleanConditionValue = (value = '') => String(value)
   .trim();
 
 const parseComparisonFragment = (fragment = '') => {
+  const hasEqualityLanguage = /^(?:is|are|was|were|equals|equal to|with|for|of|on|where|as|to|in|the)\s+/i.test(fragment.trim());
   const text = fragment
     .replace(/^(?:is|are|was|were|equals|equal to|with|for|of|on|where|as|to|in|the)\s+/, '')
     .trim();
@@ -458,6 +510,14 @@ const parseComparisonFragment = (fragment = '') => {
     }
   }
 
+  if (hasEqualityLanguage && text) {
+    return {
+      operator: 'equals',
+      value: cleanConditionValue(text).split(/\s+/).slice(0, 4).join(' '),
+      type: 'comparison'
+    };
+  }
+
   return null;
 };
 
@@ -487,7 +547,7 @@ const coerceQueryValue = (value) => {
 const extractDatabaseRequestedFields = (query, fields = []) => {
   const normalized = normalizeLabel(query);
   const phraseMatch = normalized.match(
-    /^(?:what is|what are|whats|which|show|show me|tell me|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|by|where|when|with|from|in|on)\s+|$)/
+    /^(?:what is|what are|whats|which|show|show me|tell me|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|by|where|when|with|whose|that|which|from|in|on)\s+|$)/
   );
   const phrase = phraseMatch?.[1] || '';
   const fromPhrase = phrase
@@ -499,7 +559,10 @@ const extractDatabaseRequestedFields = (query, fields = []) => {
     .map((field) => {
       const label = normalizeLabel(field);
       const match = label ? labelBoundaryRegex(label).exec(normalized) : null;
-      return match ? { field, index: match.index + match[1].length } : null;
+      if (!match) return null;
+      const before = normalized.slice(0, match.index).trim();
+      if (/\b(where|whose|with|having|that|which)\b/.test(before)) return null;
+      return { field, index: match.index + match[1].length };
     })
     .filter(Boolean)
     .sort((a, b) => a.index - b.index)
@@ -547,7 +610,7 @@ const sourceMentionScore = (query, source) => {
     { source: 'match', hints: ['match', 'matches', 'winner', 'won', 'toss', 'season', 'margin', 'player of match'] },
     { source: 'inning', hints: ['innings', 'inning', 'run rate', 'overs', 'extras'] },
     { source: 'performance', hints: ['performance', 'performances', 'scored', 'runs', 'wickets', 'balls', 'fours', 'sixes', 'catches', 'stumpings', 'economy rate', 'strike rate'] },
-    { source: 'player', hints: ['player', 'players', 'batter', 'batters', 'bowler', 'bowlers', 'role', 'country', 'age', 'batting style', 'bowling style'] },
+    { source: 'player', hints: ['player', 'players', 'batter', 'batters', 'bowler', 'bowlers', 'role', 'country', 'age', 'batting style', 'bowling style', 'matches played', 'total runs'] },
     { source: 'team', hints: ['team', 'teams', 'coach', 'home ground'] },
     { source: 'transaction', hints: ['transaction', 'transactions', 'amount', 'merchant', 'payment', 'category'] },
     { source: 'account', hints: ['account', 'accounts', 'balance', 'account type'] },
@@ -558,6 +621,11 @@ const sourceMentionScore = (query, source) => {
   for (const hint of sourceHints) {
     if (!sourceName.includes(hint.source)) continue;
     if (hint.hints.some((item) => normalized.includes(item))) score += 8;
+  }
+
+  if (/\bmatches played\b/.test(normalized)) {
+    if (sourceName.includes('player')) score += 30;
+    if (sourceName.includes('match') && !sourceName.includes('player')) score -= 20;
   }
 
   return score;
@@ -604,6 +672,17 @@ const dateVariants = (dateValue) => {
   return [dateValue];
 };
 
+const mongoTextRegex = (value = '', { exact = true } = {}) => {
+  const tokens = String(value ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(escapeRegex);
+  if (tokens.length === 0) return exact ? '^$' : '';
+  const body = tokens.join('[-_\\s]*');
+  return exact ? `^${body}$` : body;
+};
+
 const buildMongoFilter = (filters = []) => {
   const clauses = [];
 
@@ -646,8 +725,8 @@ const buildMongoFilter = (filters = []) => {
       const numeric = Number(filter.value);
       const stringValue = String(filter.value ?? '').trim();
       const regex = filter.operator === 'contains'
-        ? escapeRegex(stringValue)
-        : `^${escapeRegex(stringValue)}$`;
+        ? mongoTextRegex(stringValue, { exact: false })
+        : mongoTextRegex(stringValue, { exact: true });
       clauses.push({
         [filter.field]: Number.isFinite(numeric) && String(filter.value).trim() !== ''
           ? { $in: [filter.value, numeric] }
@@ -775,15 +854,26 @@ const countQuestionWantsFieldValue = (query, requestedField, filters = []) => {
   ));
 };
 
+const countQuestionWantsRowCount = (query, requestedField, filters = []) => {
+  const normalized = normalizeLabel(query);
+  const requestedLabel = normalizeLabel(requestedField);
+  if (!/\b(how many|count|number of)\b/.test(normalized)) return false;
+  if (/\b(rows|documents|records)\b/.test(normalized)) return true;
+  if (!requestedField) return false;
+  if (countQuestionWantsFieldValue(query, requestedField, filters)) return false;
+  return /\b(name|id)\b/.test(requestedLabel);
+};
+
 const extractDatabaseQuestion = (query, schema) => {
   const normalized = normalizeLabel(query);
   const sources = getDatabaseSourcesFromSchema(schema);
   const allFields = Array.from(new Set(sources.flatMap((source) => source.fields || [])));
   const fullRowDetails = wantsDatabaseFullRowDetails(query);
   const entityRequestedFields = inferDatabaseEntityRequestedFields(query, allFields);
-  let requestedFields = entityRequestedFields.length
-    ? entityRequestedFields
-    : extractDatabaseRequestedFields(query, allFields);
+  const explicitRequestedFields = extractDatabaseRequestedFields(query, allFields);
+  let requestedFields = explicitRequestedFields.length
+    ? explicitRequestedFields
+    : entityRequestedFields;
   let requestedField = requestedFields[0] || extractDatabaseRequestedField(query, allFields);
   if (fullRowDetails) {
     requestedFields = [];
@@ -832,8 +922,10 @@ const extractDatabaseQuestion = (query, schema) => {
   requestedField = requestedFields[0] || requestedField;
 
   const wantsFieldValueForCount = countQuestionWantsFieldValue(query, requestedField, filters);
+  const wantsRowCount = countQuestionWantsRowCount(query, requestedField, filters);
   const wantsDistinctCount = isCountQuery &&
     !wantsFieldValueForCount &&
+    !wantsRowCount &&
     requestedFields.length <= 1 &&
     requestedField &&
     !/\b(rows|documents|records)\b/.test(normalized);
@@ -845,6 +937,7 @@ const extractDatabaseQuestion = (query, schema) => {
     filters,
     fullRowDetails,
     wantsFieldValueForCount,
+    wantsRowCount,
     wantsDistinctCount
   };
 };
@@ -1970,13 +2063,16 @@ const formatDisplayValue = (value) => {
   return String(value);
 };
 
+const humanizeFieldName = (field = '') => normalizeLabel(field).replace(/\s+/g, ' ').trim() || String(field || 'value');
+
 const aggregationMetricLabel = (intent = {}) => {
+  const metricLabel = humanizeFieldName(intent.metricField);
   if (intent.operation === 'count') return 'count';
-  if (intent.operation === 'sum') return `total ${intent.metricField}`;
-  if (intent.operation === 'avg') return `average ${intent.metricField}`;
-  if (intent.operation === 'max') return `highest ${intent.metricField}`;
-  if (intent.operation === 'min') return `lowest ${intent.metricField}`;
-  return intent.metricField || 'value';
+  if (intent.operation === 'sum') return metricLabel.startsWith('total ') ? metricLabel : `total ${metricLabel}`;
+  if (intent.operation === 'avg') return `average ${metricLabel}`;
+  if (intent.operation === 'max') return `highest ${metricLabel}`;
+  if (intent.operation === 'min') return `lowest ${metricLabel}`;
+  return metricLabel || 'value';
 };
 
 const aggregationRowLabel = (row = {}, intent = {}, metricName = 'count', metricLabel = metricName) => {
@@ -2272,6 +2368,17 @@ const validateMongoPlannerPlan = (plan = {}, schema = {}, query = '') => {
   const deterministicRequestedFields = deterministicQuestion.requestedFields?.length
     ? deterministicQuestion.requestedFields
     : [deterministicQuestion.requestedField].filter(Boolean);
+  const sourceHasExpectedFilters = (deterministicQuestion.filters || [])
+    .every((filter) => Boolean(findFieldByLabel(fields, filter.field)));
+  const sourceHasExpectedRequestedField = deterministicQuestion.fullRowDetails ||
+    deterministicRequestedFields.length === 0 ||
+    deterministicRequestedFields.some((field) => Boolean(findFieldByLabel(fields, field)));
+  if (!sourceHasExpectedFilters) {
+    return { ok: false, reason: 'Planner selected a collection that cannot apply the requested filter.' };
+  }
+  if (!sourceHasExpectedRequestedField) {
+    return { ok: false, reason: 'Planner selected a collection that cannot return the requested field.' };
+  }
   if (deterministicQuestion.wantsFieldValueForCount && deterministicRequestedFields.length > 0) {
     const sourceHasRequestedField = deterministicRequestedFields.some((field) => findFieldByLabel(fields, field));
     if (!sourceHasRequestedField) {
@@ -2336,6 +2443,16 @@ const validateMongoPlannerPlan = (plan = {}, schema = {}, query = '') => {
       return { ok: false, reason: 'Planner returned an unsafe projection.' };
     }
     if (
+      deterministicRequestedFields.length > 0 &&
+      Object.keys(projection).some((key) => projection[key]) &&
+      deterministicRequestedFields
+        .map((field) => findFieldByLabel(fields, field))
+        .filter(Boolean)
+        .every((field) => !projection[field])
+    ) {
+      return { ok: false, reason: 'Planner projection dropped the requested field.' };
+    }
+    if (
       expectedEntityFields.length > 0 &&
       Object.keys(projection).some((key) => projection[key]) &&
       expectedEntityFields.every((field) => !projection[field])
@@ -2357,6 +2474,12 @@ const validateMongoPlannerPlan = (plan = {}, schema = {}, query = '') => {
     const field = String(plan.field || '').trim();
     if (!field || !validateMongoFieldKey(field, fields)) {
       return { ok: false, reason: 'Planner returned an invalid distinct field.' };
+    }
+    if (
+      deterministicRequestedFields.length > 0 &&
+      !deterministicRequestedFields.some((expected) => findFieldByLabel([field], expected))
+    ) {
+      return { ok: false, reason: 'Planner selected the wrong distinct field.' };
     }
     if (expectedEntityFields.length > 0 && !expectedEntityFields.some((expected) => findFieldByLabel([field], expected))) {
       return { ok: false, reason: 'Planner selected the filter field instead of the requested entity field.' };
@@ -2424,6 +2547,17 @@ const applyDetectedMongoConstraints = (validation = {}, query = '', schema = {})
       return acc;
     }, { _id: 0 });
     plan.projection = args.projection;
+    delete args.field;
+    delete plan.field;
+    delete args.pipeline;
+    delete plan.pipeline;
+  }
+
+  if (question.wantsRowCount) {
+    args.operation = 'count';
+    plan.operation = 'count';
+    delete args.projection;
+    delete plan.projection;
     delete args.field;
     delete plan.field;
     delete args.pipeline;
@@ -2715,10 +2849,12 @@ const runLlmMongoPlannerQuestion = async (query, { databaseId, databaseLabel, sc
     'You do not answer the user.',
     'You do not inspect raw database rows.',
     'Use only the provided collection names and fields.',
+    'A valid plan must use a collection that contains every requested answer field and every filter field.',
     'First rewrite the user request into an extractionPrompt: a precise one-sentence MongoDB extraction instruction.',
     'Only read operations are allowed: find, count, distinct, aggregate.',
     'Never use write operations, $where, $function, $lookup, $graphLookup, $out, or $merge.',
     'Prefer exact filters for names, IDs, dates, and numbers. Use case-insensitive regex only for user text values when exact casing is unknown.',
+    'For "how many <entity>" questions, use count with a tight filter. For "how many <numeric/stat field> of <entity>", use find and return that field.',
     'For detail questions, use find with a tight filter and return useful projection fields.',
     'For top, total, average, highest, lowest, or group questions, use aggregate.'
   ].join(' ');
@@ -2856,6 +2992,24 @@ const runMongoAggregationQuestion = async (query, { databaseId, databaseLabel, s
   };
 };
 
+const hasStrongDeterministicMongoPlan = (query, schema = {}, question = {}) => {
+  if (schema.type !== 'mongodb') return false;
+  if (!question || question.sources?.length === 0) return false;
+
+  const requestedFields = question.requestedFields?.length
+    ? question.requestedFields
+    : [question.requestedField].filter(Boolean);
+
+  if (detectMongoAggregationIntent(query, schema, question)) return true;
+  if (question.wantsRowCount || question.wantsDistinctCount || question.wantsFieldValueForCount) return true;
+  if (question.fullRowDetails && question.filters?.length > 0) return true;
+  if (requestedFields.length > 0 && question.filters?.length > 0) return true;
+
+  const normalized = normalizeLabel(query);
+  return requestedFields.length > 0 &&
+    /\b(what|which|who|show|list|find|get|tell me|give me|provide)\b/.test(normalized);
+};
+
 const runDatabaseQuestion = async (query, context = {}) => {
   const scope = context.scope || 'auto';
   if (scope === 'document') return null;
@@ -2938,15 +3092,18 @@ const runDatabaseQuestion = async (query, context = {}) => {
     };
   }
 
-  const llmMongoResult = await runLlmMongoPlannerQuestion(query, {
-    databaseId,
-    databaseLabel,
-    schema,
-    context
-  });
-  if (llmMongoResult) return llmMongoResult;
-
   const question = extractDatabaseQuestion(query, schema);
+  const useTrustedExtractor = hasStrongDeterministicMongoPlan(query, schema, question);
+  if (!useTrustedExtractor) {
+    const llmMongoResult = await runLlmMongoPlannerQuestion(query, {
+      databaseId,
+      databaseLabel,
+      schema,
+      context
+    });
+    if (llmMongoResult) return llmMongoResult;
+  }
+
   if (question.sources.length === 0) {
     return {
       response: structuredAnswer({
@@ -3051,6 +3208,14 @@ const runDatabaseQuestion = async (query, context = {}) => {
             filter,
             limit: 100
           }
+        : question.wantsRowCount
+        ? {
+            databaseId,
+            collection: source.name,
+            operation: 'count',
+            filter,
+            limit: 1
+          }
         : {
             databaseId,
             collection: source.name,
@@ -3087,7 +3252,9 @@ const runDatabaseQuestion = async (query, context = {}) => {
     }
 
     const { where, params } = buildSqlWhere(filters, type);
-    const fieldSql = question.fullRowDetails
+    const fieldSql = question.wantsRowCount
+      ? 'COUNT(*) AS count'
+      : question.fullRowDetails
       ? '*'
       : outputFields
         .map((field) => `${quoteSqlIdentifier(field, type)} AS ${quoteSqlIdentifier(field, type)}`)
@@ -3102,7 +3269,7 @@ const runDatabaseQuestion = async (query, context = {}) => {
           databaseId,
           sql,
           params,
-          limit: question.wantsDistinctCount ? 100 : 20
+          limit: question.wantsDistinctCount ? 100 : question.wantsRowCount ? 1 : 20
         }),
         DB_AGENT_TIMEOUT_MS,
         `Querying database ${databaseId}`
@@ -3224,6 +3391,32 @@ const runDatabaseQuestion = async (query, context = {}) => {
       }),
       toolUsed: 'database.query',
       toolResult: combinedToolResult
+    };
+  }
+
+  if (question.wantsRowCount) {
+    const totalCount = results.reduce((count, result) => {
+      const data = result.toolResult?.structuredContent;
+      if (data && typeof data === 'object' && !Array.isArray(data) && Number.isFinite(Number(data.count))) {
+        return count + Number(data.count);
+      }
+      if (Array.isArray(data) && data[0] && Number.isFinite(Number(data[0].count))) {
+        return count + Number(data[0].count);
+      }
+      return count;
+    }, 0);
+
+    return {
+      response: structuredAnswer({
+        answer: `Count: ${formatDisplayValue(totalCount)}.`,
+        details: [
+          `Database: ${databaseLabel}`,
+          sourceText ? `Source: ${sourceText}` : null,
+          filterText ? `Filter:${filterText.replace(/^ using/, '')}` : null
+        ]
+      }),
+      toolUsed: 'database.query',
+      toolResult: results[0].toolResult
     };
   }
 
