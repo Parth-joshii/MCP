@@ -329,6 +329,19 @@ const extractDatabaseRequestedField = (query, fields = []) => {
 
 const uniqueValues = (values = []) => Array.from(new Set(values.filter(Boolean)));
 
+const removeShadowedFieldMatches = (fields = []) => {
+  const uniqueFields = uniqueValues(fields);
+  return uniqueFields.filter((field) => {
+    const tokens = labelTokens(field);
+    if (tokens.length === 0) return true;
+    return !uniqueFields.some((other) => {
+      if (other === field) return false;
+      const otherTokens = labelTokens(other);
+      return otherTokens.length > tokens.length && tokens.every((token) => otherTokens.includes(token));
+    });
+  });
+};
+
 const entityRequestedFieldHints = [
   { pattern: /\b(players?|batters?|batsmen|bowlers?|keepers?|all rounders?|allrounders?)\b/, labels: ['player_name', 'player name'] },
   { pattern: /\b(customers?|clients?|users?)\b/, labels: ['customer_name', 'customer name', 'user_name', 'user name', 'name'] },
@@ -455,12 +468,13 @@ const findImplicitIdentifierField = (fields = [], requestedFields = [], contextP
 
 const extractImplicitEntityFilters = (query, fields = [], requestedFields = [], sources = []) => {
   const normalized = normalizeLabel(query);
-  if (!/\b(of|for|about|by|named|called)\b/.test(normalized)) return [];
+  if (!/\b(of|for|about|by|named|called|return|returns|returned)\b/.test(normalized)) return [];
 
   const requested = requestedFields.filter(Boolean);
   const patterns = [
     /\b(?:of|for|about|by)\s+(?:the\s+)?(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/,
-    /\b(?:named|called)\s+(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/
+    /\b(?:named|called)\s+(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/,
+    /\b(?:returns?|returned)\s+(?:the\s+)?(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/
   ];
 
   for (const pattern of patterns) {
@@ -603,7 +617,7 @@ const extractDatabaseRequestedFields = (query, fields = []) => {
     .sort((a, b) => a.index - b.index)
     .map((item) => item.field);
 
-  return uniqueValues([...fromPhrase, ...mentioned]);
+  return removeShadowedFieldMatches([...fromPhrase, ...mentioned]);
 };
 
 const wantsDatabaseFullRowDetails = (query) => {
