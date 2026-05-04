@@ -1,0 +1,13 @@
+@echo off
+echo Starting AI E-Commerce Platform...
+
+echo Starting Python Analytics Service...
+start cmd /k "cd analytics-service && .\venv\Scripts\activate && uvicorn app:app --reload --port 8000"
+
+echo Starting Node.js Backend...
+start cmd /k "cd backend && node server.js"
+
+echo Starting Vite Frontend...
+start cmd /k "cd frontend && npm run dev"
+
+echo All services started! Check the Vite console for the Local URL (usually http://localhost:5173).

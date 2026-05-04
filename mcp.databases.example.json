@@ -1,0 +1,26 @@
+[
+  {
+    "id": "default",
+    "type": "mongodb",
+    "uri": "mongodb://localhost:27017/ai-ecommerce",
+    "description": "Local MongoDB database"
+  },
+  {
+    "id": "warehouse",
+    "type": "postgres",
+    "uri": "postgres://user:password@localhost:5432/warehouse",
+    "description": "Example PostgreSQL connection. Requires pg driver support."
+  },
+  {
+    "id": "app-mysql",
+    "type": "mysql",
+    "uri": "mysql://user:password@localhost:3306/app",
+    "description": "Example MySQL connection. Requires mysql2 driver support."
+  },
+  {
+    "id": "local-sqlite",
+    "type": "sqlite",
+    "path": "./data/app.sqlite",
+    "description": "Example SQLite connection. Requires sqlite driver support."
+  }
+]
