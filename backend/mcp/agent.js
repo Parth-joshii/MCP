@@ -300,6 +300,13 @@ const fieldMatchQuality = (fields = [], candidate) => {
   return tokenMatch || { field: null, score: 0 };
 };
 
+const isExactFieldLabelMatch = (field, candidate) => {
+  const normalizedField = normalizeLabel(field);
+  const normalizedCandidate = normalizeLabel(candidate);
+  if (!normalizedField || !normalizedCandidate) return false;
+  return normalizedField === normalizedCandidate || compactLabel(field) === compactLabel(candidate);
+};
+
 const extractDatabaseRequestedField = (query, fields = []) => {
   const normalized = normalizeLabel(query);
   const phraseMatch = normalized.match(
@@ -325,6 +332,7 @@ const uniqueValues = (values = []) => Array.from(new Set(values.filter(Boolean))
 const entityRequestedFieldHints = [
   { pattern: /\b(players?|batters?|batsmen|bowlers?|keepers?|all rounders?|allrounders?)\b/, labels: ['player_name', 'player name'] },
   { pattern: /\b(customers?|clients?|users?)\b/, labels: ['customer_name', 'customer name', 'user_name', 'user name', 'name'] },
+  { pattern: /\b(products?|items?|line items?)\b/, labels: ['product_name', 'product name', 'item_name', 'item name', 'name'] },
   { pattern: /\b(teams?|clubs?)\b/, labels: ['team_name', 'team name'] },
   { pattern: /\b(accounts?)\b/, labels: ['account_id', 'account id', 'account_name', 'account name'] },
   { pattern: /\b(orders?)\b/, labels: ['order_id', 'order id'] },
@@ -361,7 +369,8 @@ const implicitFilterStopWords = new Set([
   'the', 'a', 'an', 'this', 'that', 'selected', 'database', 'document', 'record',
   'row', 'rows', 'table', 'collection', 'details', 'detail', 'info', 'information', 'informations',
   'account', 'accounts', 'client', 'clients', 'customer', 'customers', 'order', 'orders',
-  'player', 'players', 'transaction', 'transactions', 'user', 'users'
+  'item', 'items', 'line', 'product', 'products', 'player', 'players', 'transaction',
+  'transactions', 'user', 'users'
 ]);
 
 const cleanImplicitFilterValue = (value = '') => normalizeLabel(value)
@@ -370,7 +379,7 @@ const cleanImplicitFilterValue = (value = '') => normalizeLabel(value)
   .join(' ')
   .trim();
 
-const findImplicitIdentifierField = (fields = [], requestedFields = [], contextPhrase = '') => {
+const findImplicitIdentifierField = (fields = [], requestedFields = [], contextPhrase = '', sources = []) => {
   const requested = new Set(requestedFields.filter(Boolean));
   const context = normalizeLabel(contextPhrase);
   const contextualCandidates = [
@@ -378,6 +387,7 @@ const findImplicitIdentifierField = (fields = [], requestedFields = [], contextP
     { pattern: /\bclients?\b|\bcustomers?\b/, labels: ['customer_name', 'customer name', 'name'] },
     { pattern: /\bmatches?\b/, labels: ['match_id', 'match id'] },
     { pattern: /\borders?\b/, labels: ['order_id', 'order id'] },
+    { pattern: /\bproducts?\b|\bitems?\b|\bline items?\b/, labels: ['product_name', 'product name', 'item_name', 'item name', 'name'] },
     { pattern: /\bplayers?\b/, labels: ['player_name', 'player name', 'name'] },
     { pattern: /\bteams?\b/, labels: ['team_name', 'team name', 'name'] },
     { pattern: /\btransactions?\b|\btxn\b/, labels: ['transaction_id', 'transaction id'] },
@@ -397,6 +407,10 @@ const findImplicitIdentifierField = (fields = [], requestedFields = [], contextP
     'player name',
     'customer_name',
     'customer name',
+    'product_name',
+    'product name',
+    'item_name',
+    'item name',
     'user_name',
     'user name',
     'team_name',
@@ -413,10 +427,25 @@ const findImplicitIdentifierField = (fields = [], requestedFields = [], contextP
     'id'
   ];
 
-  for (const candidate of candidates) {
-    const field = findFieldByLabel(fields, candidate);
-    if (field && !requested.has(field)) return field;
-  }
+  const coOccursWithRequested = (field) => {
+    if (!field || requested.size === 0 || sources.length === 0) return false;
+    return sources.some((source) => {
+      const sourceFields = source.fields || [];
+      if (!findFieldByLabel(sourceFields, field)) return false;
+      return Array.from(requested).some((requestedField) => findFieldByLabel(sourceFields, requestedField));
+    });
+  };
+
+  const bestCandidate = candidates
+    .map((candidate, index) => {
+      const field = findFieldByLabel(fields, candidate);
+      if (!field || requested.has(field)) return null;
+      return { field, index, coOccurs: coOccursWithRequested(field) };
+    })
+    .filter(Boolean)
+    .sort((a, b) => Number(b.coOccurs) - Number(a.coOccurs) || a.index - b.index)[0];
+
+  if (bestCandidate) return bestCandidate.field;
 
   return fields.find((field) => (
     !requested.has(field) &&
@@ -424,7 +453,7 @@ const findImplicitIdentifierField = (fields = [], requestedFields = [], contextP
   )) || null;
 };
 
-const extractImplicitEntityFilters = (query, fields = [], requestedFields = []) => {
+const extractImplicitEntityFilters = (query, fields = [], requestedFields = [], sources = []) => {
   const normalized = normalizeLabel(query);
   if (!/\b(of|for|about|by|named|called)\b/.test(normalized)) return [];
 
@@ -437,7 +466,7 @@ const extractImplicitEntityFilters = (query, fields = [], requestedFields = []) 
   for (const pattern of patterns) {
     const match = normalized.match(pattern);
     const rawValue = match?.[1] || '';
-    const identifierField = findImplicitIdentifierField(fields, requested, rawValue);
+    const identifierField = findImplicitIdentifierField(fields, requested, rawValue, sources);
     if (!identifierField) return [];
     const value = cleanImplicitFilterValue(rawValue);
     if (!value) continue;
@@ -649,10 +678,18 @@ const selectDatabaseSources = (query, sources, requestedFields, filters) => {
     ? requestedFields.filter(Boolean)
     : [requestedFields].filter(Boolean);
   const normalized = normalizeLabel(query);
+  const exactRequestedAvailable = new Set(requestedList.filter((requestedField) => (
+    sources.some((source) => (source.fields || []).some((field) => isExactFieldLabelMatch(field, requestedField)))
+  )).map(normalizeLabel));
   return sources
     .map((source, index) => {
       const fields = source.fields || [];
-      const matchedRequested = requestedList.filter((field) => findFieldByLabel(fields, field)).length;
+      const matchedRequested = requestedList.filter((field) => {
+        const matchedField = findFieldByLabel(fields, field);
+        if (!matchedField) return false;
+        if (!exactRequestedAvailable.has(normalizeLabel(field))) return true;
+        return isExactFieldLabelMatch(matchedField, field);
+      }).length;
       const matchedFilters = filters.filter((filter) => findFieldByLabel(fields, filter.field)).length;
       const profileBoost = /\b(details|detail|information|informations|profile|all data|all details)\b/.test(normalized)
         ? filters.reduce((score, filter) => {
@@ -938,7 +975,7 @@ const extractDatabaseQuestion = (query, schema) => {
     ...filters.map((filter) => filter.field)
   ]);
   filters.push(...comparisonFilters);
-  filters.push(...extractImplicitEntityFilters(query, allFields, [requestedField, ...requestedFields]));
+  filters.push(...extractImplicitEntityFilters(query, allFields, [requestedField, ...requestedFields], sources));
 
   for (const field of allFields) {
     if (
