@@ -322,6 +322,82 @@ const inferDatabaseEntityRequestedFields = (query, fields = []) => {
   return uniqueValues(inferred);
 };
 
+const implicitFilterStopWords = new Set([
+  'the', 'a', 'an', 'this', 'that', 'selected', 'database', 'document', 'record',
+  'row', 'rows', 'table', 'collection', 'details', 'detail', 'info', 'information'
+]);
+
+const cleanImplicitFilterValue = (value = '') => normalizeLabel(value)
+  .split(/\s+/)
+  .filter((token) => token && !implicitFilterStopWords.has(token))
+  .join(' ')
+  .trim();
+
+const findImplicitIdentifierField = (fields = [], requestedFields = []) => {
+  const requested = new Set(requestedFields.filter(Boolean));
+  const candidates = [
+    'player_name',
+    'player name',
+    'customer_name',
+    'customer name',
+    'user_name',
+    'user name',
+    'team_name',
+    'team name',
+    'account_id',
+    'account id',
+    'order_id',
+    'order id',
+    'transaction_id',
+    'transaction id',
+    'match_id',
+    'match id',
+    'name',
+    'id'
+  ];
+
+  for (const candidate of candidates) {
+    const field = findFieldByLabel(fields, candidate);
+    if (field && !requested.has(field)) return field;
+  }
+
+  return fields.find((field) => (
+    !requested.has(field) &&
+    /\b(name|id)\b/.test(normalizeLabel(field))
+  )) || null;
+};
+
+const extractImplicitEntityFilters = (query, fields = [], requestedFields = []) => {
+  const normalized = normalizeLabel(query);
+  if (!/\b(of|for|about)\b/.test(normalized)) return [];
+
+  const requested = requestedFields.filter(Boolean);
+  const identifierField = findImplicitIdentifierField(fields, requested);
+  if (!identifierField) return [];
+
+  const patterns = [
+    /\b(?:of|for|about)\s+(?:the\s+)?(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/,
+    /\b(?:named|called)\s+(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const value = cleanImplicitFilterValue(match?.[1] || '');
+    if (!value) continue;
+    if (findFieldByLabel(fields, value)) continue;
+    if (requested.some((field) => normalizeLabel(field) === value)) continue;
+
+    return [{
+      field: identifierField,
+      value,
+      type: 'value',
+      operator: 'contains'
+    }];
+  }
+
+  return [];
+};
+
 const toNumber = (value) => {
   const parsed = Number(String(value ?? '').replace(/,/g, ''));
   return Number.isFinite(parsed) ? parsed : null;
@@ -568,10 +644,14 @@ const buildMongoFilter = (filters = []) => {
       });
     } else {
       const numeric = Number(filter.value);
+      const stringValue = String(filter.value ?? '').trim();
+      const regex = filter.operator === 'contains'
+        ? escapeRegex(stringValue)
+        : `^${escapeRegex(stringValue)}$`;
       clauses.push({
         [filter.field]: Number.isFinite(numeric) && String(filter.value).trim() !== ''
           ? { $in: [filter.value, numeric] }
-          : { $regex: `^${escapeRegex(filter.value)}$`, $options: 'i' }
+          : { $regex: regex, $options: 'i' }
       });
     }
   }
@@ -688,6 +768,7 @@ const extractDatabaseQuestion = (query, schema) => {
     ...filters.map((filter) => filter.field)
   ]);
   filters.push(...comparisonFilters);
+  filters.push(...extractImplicitEntityFilters(query, allFields, [requestedField, ...requestedFields]));
 
   for (const field of allFields) {
     if (
@@ -2268,6 +2349,21 @@ const applyDetectedMongoConstraints = (validation = {}, query = '', schema = {})
     }
   }
 
+  const implicitIdentifierFields = detectedFilters
+    .filter((filter) => filter.operator === 'contains' && /\b(name|id)\b/.test(normalizeLabel(filter.field)))
+    .map((filter) => filter.field);
+  if (args.operation === 'distinct' && implicitIdentifierFields.length > 0 && args.field) {
+    args.operation = 'find';
+    plan.operation = 'find';
+    args.projection = uniqueValues([...implicitIdentifierFields, args.field]).reduce((acc, field) => {
+      acc[field] = 1;
+      return acc;
+    }, { _id: 0 });
+    plan.projection = args.projection;
+    delete args.field;
+    delete plan.field;
+  }
+
   if (
     args.operation === 'find' &&
     expectedEntityFields.length > 0 &&
@@ -2398,6 +2494,28 @@ const professionalMongoFallbackAnswer = ({ databaseLabel, sourceName, plan, tool
     });
   }
 
+  if (Array.isArray(extracted?.rows) && extracted.rows.length > 0) {
+    const rowLines = extracted.rows.slice(0, 20).map((row) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return formatDisplayValue(row);
+      return Object.entries(row)
+        .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+        .map(([field, value]) => `${field}: ${formatDisplayValue(value)}`)
+        .join(', ');
+    }).filter(Boolean);
+
+    if (rowLines.length > 0) {
+      return structuredAnswer({
+        answer: rowLines,
+        details: [
+          `Matched rows: ${extracted.returnedRows || rowLines.length}`,
+          `Database: ${databaseLabel}`,
+          `Collection: ${sourceName}`,
+          'Answered from MongoDB extraction.'
+        ]
+      });
+    }
+  }
+
   return summarizeLlmMongoPlannerResult({ databaseLabel, sourceName, plan, toolResult });
 };
 
@@ -2405,6 +2523,17 @@ const finalAnswerCoversMongoValues = (answer = '', extracted = {}) => {
   if (!Array.isArray(extracted.values) || extracted.values.length === 0 || extracted.values.length > 25) return true;
   const normalizedAnswer = normalizeForIntent(answer);
   return extracted.values.every((value) => normalizedAnswer.includes(normalizeForIntent(value)));
+};
+
+const finalAnswerCoversMongoRows = (answer = '', extracted = {}) => {
+  if (!Array.isArray(extracted.rows) || extracted.rows.length === 0 || extracted.rows.length > 10) return true;
+  const normalizedAnswer = normalizeForIntent(answer);
+  const values = extracted.rows.flatMap((row) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return [row];
+    return Object.values(row);
+  }).filter((value) => value !== null && value !== undefined && String(value).trim() !== '');
+
+  return values.every((value) => normalizedAnswer.includes(normalizeForIntent(value)));
 };
 
 const answerWithLlmFromMongoExtraction = async ({ query, databaseLabel, sourceName, plan, toolResult, extractionPrompt }) => {
@@ -2464,7 +2593,13 @@ If "values" is present, use those values as the direct answer and include every 
     );
 
     const answer = formatModelAnswer(response.data?.response);
-    if (!answer || !finalAnswerCoversMongoValues(answer, extractedData)) return fallback;
+    if (
+      !answer ||
+      !finalAnswerCoversMongoValues(answer, extractedData) ||
+      !finalAnswerCoversMongoRows(answer, extractedData)
+    ) {
+      return fallback;
+    }
     return answer;
   } catch (error) {
     controller.abort();
@@ -2803,10 +2938,17 @@ const runDatabaseQuestion = async (query, context = {}) => {
         return actualField ? { ...filter, field: actualField } : null;
       })
       .filter(Boolean);
+    const contextFields = uniqueValues(filters
+      .filter((filter) => filter.operator === 'contains' && /\b(name|id)\b/.test(normalizeLabel(filter.field)))
+      .map((filter) => filter.field)
+      .filter((field) => !actualRequestedFields.includes(field)));
+    const outputFields = question.fullRowDetails
+      ? []
+      : uniqueValues([...contextFields, ...actualRequestedFields]);
 
     if (type === 'mongodb') {
       const filter = buildMongoFilter(filters);
-      const projection = actualRequestedFields.reduce((acc, field) => {
+      const projection = outputFields.reduce((acc, field) => {
         acc[field] = 1;
         return acc;
       }, { _id: 0 });
@@ -2843,13 +2985,13 @@ const runDatabaseQuestion = async (query, context = {}) => {
           `Querying database ${databaseId}`
         );
         if (!toolResult.isError) {
-          results.push({ source, requestedField, requestedFields: actualRequestedFields, filters, toolResult, rows: toolResult.structuredContent || [] });
+          results.push({ source, requestedField, requestedFields: outputFields, filters, toolResult, rows: toolResult.structuredContent || [] });
         }
       } catch (error) {
         results.push({
           source,
           requestedField,
-          requestedFields: actualRequestedFields,
+          requestedFields: outputFields,
           filters,
           toolResult: {
             isError: true,
@@ -2865,7 +3007,7 @@ const runDatabaseQuestion = async (query, context = {}) => {
     const { where, params } = buildSqlWhere(filters, type);
     const fieldSql = question.fullRowDetails
       ? '*'
-      : actualRequestedFields
+      : outputFields
         .map((field) => `${quoteSqlIdentifier(field, type)} AS ${quoteSqlIdentifier(field, type)}`)
         .join(', ');
     const sourceSql = quoteSqlSource(source, type);
@@ -2884,13 +3026,13 @@ const runDatabaseQuestion = async (query, context = {}) => {
         `Querying database ${databaseId}`
       );
       if (!toolResult.isError) {
-        results.push({ source, requestedField, requestedFields: actualRequestedFields, filters, toolResult, rows: toolResult.structuredContent || [] });
+        results.push({ source, requestedField, requestedFields: outputFields, filters, toolResult, rows: toolResult.structuredContent || [] });
       }
     } catch (error) {
       results.push({
         source,
         requestedField,
-        requestedFields: actualRequestedFields,
+        requestedFields: outputFields,
         filters,
         toolResult: {
           isError: true,
