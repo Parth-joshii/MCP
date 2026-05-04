@@ -387,24 +387,43 @@ const implicitFilterStopWords = new Set([
   'transactions', 'return', 'returns', 'returned', 'refund', 'refunds', 'refunded', 'user', 'users'
 ]);
 
-const cleanImplicitFilterValue = (value = '') => normalizeLabel(value)
+const normalizePrefixedIdValue = (value = '') => {
+  let normalized = normalizeLabel(value);
+  const replacements = [
+    { pattern: /\bcustomer\s+(\d+)\b/g, replacement: 'cust $1' },
+    { pattern: /\bproduct\s+(\d+)\b/g, replacement: 'prd $1' },
+    { pattern: /\border\s+(\d+)\b/g, replacement: 'ord $1' },
+    { pattern: /\breturn\s+(\d+)\b/g, replacement: 'ret $1' },
+    { pattern: /\bpayment\s+(\d+)\b/g, replacement: 'pay $1' },
+    { pattern: /\bshipment\s+(\d+)\b/g, replacement: 'shp $1' },
+    { pattern: /\btransaction\s+(\d+)\b/g, replacement: 'txn $1' },
+    { pattern: /\bplayer\s+(\d+)\b/g, replacement: 'ply $1' },
+    { pattern: /\baccount\s+(\d+)\b/g, replacement: 'acc $1' }
+  ];
+  for (const item of replacements) {
+    normalized = normalized.replace(item.pattern, item.replacement);
+  }
+  return normalized;
+};
+
+const cleanImplicitFilterValue = (value = '') => normalizePrefixedIdValue(value)
   .split(/\s+/)
   .filter((token) => token && !implicitFilterStopWords.has(token))
   .join(' ')
   .trim();
 
 const idPrefixIdentifierHints = [
-  { pattern: /\bret\s*\d+\b/, labels: ['return_id', 'return id'] },
-  { pattern: /\bord\s*\d+\b/, labels: ['order_id', 'order id'] },
-  { pattern: /\bcust\s*\d+\b/, labels: ['customer_id', 'customer id'] },
-  { pattern: /\bprd\s*\d+\b/, labels: ['product_id', 'product id'] },
-  { pattern: /\bpay\s*\d+\b/, labels: ['payment_id', 'payment id'] },
-  { pattern: /\bshp\s*\d+\b/, labels: ['shipment_id', 'shipment id'] },
+  { pattern: /\b(?:ret|return)\s*\d+\b/, labels: ['return_id', 'return id'] },
+  { pattern: /\b(?:ord|order)\s*\d+\b/, labels: ['order_id', 'order id'] },
+  { pattern: /\b(?:cust|customer)\s*\d+\b/, labels: ['customer_id', 'customer id'] },
+  { pattern: /\b(?:prd|product)\s*\d+\b/, labels: ['product_id', 'product id'] },
+  { pattern: /\b(?:pay|payment)\s*\d+\b/, labels: ['payment_id', 'payment id'] },
+  { pattern: /\b(?:shp|shipment)\s*\d+\b/, labels: ['shipment_id', 'shipment id'] },
   { pattern: /\bitem\s*\d+\b/, labels: ['line_item_id', 'line item id', 'item_id', 'item id'] },
-  { pattern: /\btxn\s*\d+\b/, labels: ['transaction_id', 'transaction id'] },
-  { pattern: /\bply\s*\d+\b/, labels: ['player_id', 'player id'] },
+  { pattern: /\b(?:txn|transaction)\s*\d+\b/, labels: ['transaction_id', 'transaction id'] },
+  { pattern: /\b(?:ply|player)\s*\d+\b/, labels: ['player_id', 'player id'] },
   { pattern: /\bteam\s*\d+\b/, labels: ['team_id', 'team id'] },
-  { pattern: /\bacc\s*\d+\b/, labels: ['account_id', 'account id'] }
+  { pattern: /\b(?:acc|account)\s*\d+\b/, labels: ['account_id', 'account id'] }
 ];
 
 const findIdentifierFieldByIdPrefix = (fields = [], requested = new Set(), context = '') => {
@@ -687,6 +706,23 @@ const sourceMentionScore = (query, source) => {
   let score = labels.some((label) => label && normalized.includes(label)) ? 35 : 0;
 
   const sourceName = normalizeLabel(source.name || source.table || '');
+  const idPrefixSourceHints = [
+    { pattern: /\bret\s*\d+\b/, source: 'return' },
+    { pattern: /\bord\s*\d+\b/, source: 'order' },
+    { pattern: /\bcust\s*\d+\b/, source: 'customer' },
+    { pattern: /\bprd\s*\d+\b/, source: 'product' },
+    { pattern: /\bpay\s*\d+\b/, source: 'payment' },
+    { pattern: /\bshp\s*\d+\b/, source: 'shipment' },
+    { pattern: /\bitem\s*\d+\b/, source: 'item' },
+    { pattern: /\btxn\s*\d+\b/, source: 'transaction' },
+    { pattern: /\bply\s*\d+\b/, source: 'player' },
+    { pattern: /\bteam\s*\d+\b/, source: 'team' },
+    { pattern: /\bacc\s*\d+\b/, source: 'account' }
+  ];
+  for (const hint of idPrefixSourceHints) {
+    if (hint.pattern.test(normalized) && sourceName.includes(hint.source)) score += 18;
+  }
+
   const sourceHints = [
     { source: 'match', hints: ['match', 'matches', 'winner', 'won', 'toss', 'season', 'margin', 'player of match'] },
     { source: 'inning', hints: ['innings', 'inning', 'run rate', 'overs', 'extras'] },
@@ -926,6 +962,12 @@ const formatFilter = (filter = {}) => {
 
   return `${filter.field} ${operatorText} ${formatFilterValue(filter.value)}`;
 };
+
+const isExactIdentifierFilter = (filter = {}) => (
+  ['exact', 'equals'].includes(filter.operator || 'exact') &&
+  /\bid\b/.test(normalizeLabel(filter.field || '')) &&
+  /\b[a-z]{2,}\s+\d+\b/.test(normalizePrefixedIdValue(filter.value || ''))
+);
 
 const dedupeSpecificFilters = (filters = []) => filters.filter((filter, index) => {
   const label = normalizeLabel(filter.field);
@@ -3344,7 +3386,11 @@ const runDatabaseQuestion = async (query, context = {}) => {
   const results = [];
   const type = schema.type;
 
-  for (const source of candidateSources.slice(0, 3)) {
+  const sourcesToQuery = !question.fullRowDetails && question.filters.some(isExactIdentifierFilter)
+    ? candidateSources.slice(0, 1)
+    : candidateSources.slice(0, 3);
+
+  for (const source of sourcesToQuery) {
     const sourceFields = source.fields || [];
     const actualRequestedFields = question.fullRowDetails
       ? []

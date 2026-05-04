@@ -164,6 +164,14 @@ Go to the **Agent** page and try generic database or document queries:
 -   "What is the product on date 02-03-2023?"
 -   "Change product on date 02-03-2023 to Snacks"
 
+Run the regression checks for the known MongoDB query patterns:
+```bash
+cd backend
+npm run test:agent
+```
+
+This verifies prefixed ids such as `RET-00002`, `PRD-0020`, and `CUST-0001`, product-name filters, counts, and cricket demo field lookups against the local demo databases.
+
 ## Generic Database MCP Server
 
 The backend includes a generic database MCP server built with the official `@modelcontextprotocol/sdk`. It is not tied to e-commerce data: the MCP server reads database access from configuration, exposes tools/resources/prompts, and lets MCP clients discover schemas before querying.

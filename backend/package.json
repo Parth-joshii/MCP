@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
+    "test:agent": "node test-agent-regression.js",
     "seed:sales": "node seed-sales-demo.js",
     "mcp:stdio": "node mcp-stdio.js"
   },
