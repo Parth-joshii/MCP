@@ -2339,7 +2339,42 @@ const convertSimplePipelineToFindPlan = (pipeline = []) => {
   return converted;
 };
 
+const normalizeMongoExtractionPlan = (plan = {}) => {
+  const nestedQuery = plan.mongoQuery && typeof plan.mongoQuery === 'object' && !Array.isArray(plan.mongoQuery)
+    ? plan.mongoQuery
+    : plan.query && typeof plan.query === 'object' && !Array.isArray(plan.query)
+      ? plan.query
+      : {};
+  const intent = plan.intent && typeof plan.intent === 'object' && !Array.isArray(plan.intent)
+    ? plan.intent
+    : {};
+  const responsePlan = plan.response && typeof plan.response === 'object' && !Array.isArray(plan.response)
+    ? plan.response
+    : plan.answer && typeof plan.answer === 'object' && !Array.isArray(plan.answer)
+      ? plan.answer
+      : {};
+
+  return {
+    ...plan,
+    ...nestedQuery,
+    version: plan.version || 'mongo-extraction-v1',
+    extractionPrompt: plan.extractionPrompt || intent.extractionPrompt || plan.instruction || '',
+    answerIntent: plan.answerIntent || intent.answerIntent || responsePlan.intent || '',
+    collection: nestedQuery.collection || plan.collection || plan.table || '',
+    operation: nestedQuery.operation || plan.operation || '',
+    filter: nestedQuery.filter || plan.filter || {},
+    projection: nestedQuery.projection || plan.projection || {},
+    sort: nestedQuery.sort || plan.sort || {},
+    field: nestedQuery.field || plan.field || '',
+    pipeline: nestedQuery.pipeline || plan.pipeline || [],
+    limit: nestedQuery.limit || plan.limit || 20,
+    intent,
+    responsePlan
+  };
+};
+
 const validateMongoPlannerPlan = (plan = {}, schema = {}, query = '') => {
+  plan = normalizeMongoExtractionPlan(plan);
   const sources = getDatabaseSourcesFromSchema(schema);
   const collection = String(plan.collection || plan.table || '').trim();
   const source = sources.find((item) => item.name === collection);
@@ -2867,18 +2902,31 @@ Corrected question: ${query}
 MongoDB schema:
 ${JSON.stringify(schemaSummary, null, 2)}
 
-Return this JSON shape:
+Return this exact mongo-extraction-v1 JSON shape:
 {
-  "extractionPrompt": "precise extraction instruction for MongoDB",
-  "answerIntent": "what the final answer should explain",
-  "collection": "one collection from schema",
-  "operation": "find | count | distinct | aggregate",
-  "filter": {},
-  "projection": {},
-  "sort": {},
-  "field": "field for distinct only",
-  "pipeline": [],
-  "limit": 20
+  "version": "mongo-extraction-v1",
+  "extractionPrompt": "one precise sentence describing exactly which MongoDB records/values to extract",
+  "intent": {
+    "answerType": "single_value | row_list | count | distinct_values | aggregate",
+    "requestedFields": ["fields needed in the final answer"],
+    "filterFields": ["fields used to restrict rows"],
+    "reason": "short reason for choosing the collection and operation"
+  },
+  "mongoQuery": {
+    "collection": "one collection from schema",
+    "operation": "find | count | distinct | aggregate",
+    "filter": {},
+    "projection": {},
+    "sort": {},
+    "field": "field for distinct only",
+    "pipeline": [],
+    "limit": 20
+  },
+  "response": {
+    "answerFields": ["fields the final answer must include"],
+    "includeTable": false,
+    "format": "Answer / Details / Next"
+  }
 }`;
 
   try {
@@ -2894,9 +2942,10 @@ Return this JSON shape:
     );
 
     const parsed = parseLooseJsonObject(response.data?.response);
-    let validation = validateMongoPlannerPlan(parsed || {}, schema, query);
+    const normalizedPlan = normalizeMongoExtractionPlan(parsed || {});
+    let validation = validateMongoPlannerPlan(normalizedPlan, schema, query);
     if (!validation.ok) {
-      console.warn('LLM Mongo planner rejected:', validation.reason, parsed?.operation ? `operation=${parsed.operation}` : '');
+      console.warn('LLM Mongo planner rejected:', validation.reason, normalizedPlan.operation ? `operation=${normalizedPlan.operation}` : '');
       return null;
     }
     validation = applyDetectedMongoConstraints(validation, query, schema);
@@ -2918,8 +2967,11 @@ Return this JSON shape:
       return null;
     }
 
-    const extractionPrompt = normalizeExtractionPrompt(parsed?.extractionPrompt, query);
+    const extractionPrompt = normalizeExtractionPrompt(normalizedPlan.extractionPrompt, query);
     validation.plan.extractionPrompt = extractionPrompt;
+    validation.plan.version = normalizedPlan.version || 'mongo-extraction-v1';
+    validation.plan.intent = normalizedPlan.intent;
+    validation.plan.responsePlan = normalizedPlan.responsePlan;
     const finalAnswer = await answerWithLlmFromMongoExtraction({
       query,
       databaseLabel,

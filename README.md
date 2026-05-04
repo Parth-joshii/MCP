@@ -248,7 +248,51 @@ MCP_DATABASE_SNAPSHOT_MAX_MUTATION_ROWS=1000
 MCP_DOCUMENT_MAX_MUTATION_ROWS=100
 ```
 
-The Agent page has an **AI assist** checkbox. When it is enabled for MongoDB, the backend follows this workflow: user prompt -> Llama extraction prompt/query plan -> MongoDB read execution -> extracted result -> Llama final answer. If Llama creates an invalid plan, times out, or drops extracted values in the final answer, the backend repairs or falls back to the exact MongoDB result.
+The Agent page has an **AI assist** checkbox. For MongoDB, the backend now prefers the trusted schema extractor first. If the schema match is strong, the backend directly creates the safe `find`, `count`, `distinct`, or `aggregate` query. If the schema match is not strong enough, Llama must return the `mongo-extraction-v1` JSON contract, then the backend validates it before any MCP tool is executed.
+
+Mongo extraction workflow:
+```text
+User question
+-> prompt cleanup / keyword detection
+-> trusted backend extractor when fields and filters match the schema
+-> otherwise Llama returns mongo-extraction-v1 JSON
+-> backend validates collection, fields, filters, operation, and read-only safety
+-> MCP tool database.query executes MongoDB
+-> exact MongoDB result
+-> final answer formatter
+-> user
+```
+
+Mongo extraction plan format:
+```json
+{
+  "version": "mongo-extraction-v1",
+  "extractionPrompt": "one precise sentence describing exactly which MongoDB records/values to extract",
+  "intent": {
+    "answerType": "single_value | row_list | count | distinct_values | aggregate",
+    "requestedFields": ["fields needed in the final answer"],
+    "filterFields": ["fields used to restrict rows"],
+    "reason": "short reason for choosing the collection and operation"
+  },
+  "mongoQuery": {
+    "collection": "one collection from schema",
+    "operation": "find | count | distinct | aggregate",
+    "filter": {},
+    "projection": {},
+    "sort": {},
+    "field": "field for distinct only",
+    "pipeline": [],
+    "limit": 20
+  },
+  "response": {
+    "answerFields": ["fields the final answer must include"],
+    "includeTable": false,
+    "format": "Answer / Details / Next"
+  }
+}
+```
+
+Full examples are in `docs/mongo-extraction-format.md`.
 
 Database access configuration:
 1.  Copy `mcp.databases.example.json` to `mcp.databases.json`.
