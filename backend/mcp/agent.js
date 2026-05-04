@@ -198,6 +198,12 @@ const meaningfulTokenOverlap = (candidateTokens = [], fieldTokens = []) => {
   return meaningful.some((token) => fieldTokens.includes(token));
 };
 
+const fieldTokenMatchAllowed = (candidateTokens = [], fieldTokens = [], overlap = 0, ratio = 0) => {
+  if (!meaningfulTokenOverlap(candidateTokens, fieldTokens)) return false;
+  if (candidateTokens.length > 1 && fieldTokens.length > 1 && overlap < candidateTokens.length) return false;
+  return overlap > 0 && (ratio > 0.5 || overlap === candidateTokens.length);
+};
+
 const findFieldByLabel = (fields = [], candidate) => {
   const normalizedCandidate = normalizeLabel(candidate);
   const compactCandidate = compactLabel(candidate);
@@ -239,10 +245,10 @@ const findFieldByLabel = (fields = [], candidate) => {
         overlap,
         score,
         fieldTokenCount: fieldTokens.length,
-        meaningfulOverlap: meaningfulTokenOverlap(candidateTokens, fieldTokens)
+        allowed: fieldTokenMatchAllowed(candidateTokens, fieldTokens, overlap, score)
       };
     })
-    .filter((item) => item.meaningfulOverlap && item.overlap > 0 && (item.score >= 0.5 || item.overlap === candidateTokens.length))
+    .filter((item) => item.allowed)
     .sort((a, b) => b.score - a.score || a.fieldTokenCount - b.fieldTokenCount)[0]?.field || null;
 };
 
@@ -280,10 +286,10 @@ const fieldMatchQuality = (fields = [], candidate) => {
       const fieldTokens = labelTokens(field);
       const overlap = candidateTokens.filter((token) => fieldTokens.includes(token)).length;
       const ratio = overlap / Math.max(candidateTokens.length, 1);
-      const hasMeaningfulOverlap = meaningfulTokenOverlap(candidateTokens, fieldTokens);
+      const allowed = fieldTokenMatchAllowed(candidateTokens, fieldTokens, overlap, ratio);
       return {
         field,
-        score: hasMeaningfulOverlap && overlap > 0 && (ratio >= 0.5 || overlap === candidateTokens.length)
+        score: allowed
           ? Math.round(40 + ratio * 20)
           : 0
       };
@@ -612,6 +618,13 @@ const sourceMentionScore = (query, source) => {
     { source: 'performance', hints: ['performance', 'performances', 'scored', 'runs', 'wickets', 'balls', 'fours', 'sixes', 'catches', 'stumpings', 'economy rate', 'strike rate'] },
     { source: 'player', hints: ['player', 'players', 'batter', 'batters', 'bowler', 'bowlers', 'role', 'country', 'age', 'batting style', 'bowling style', 'matches played', 'total runs'] },
     { source: 'team', hints: ['team', 'teams', 'coach', 'home ground'] },
+    { source: 'customer', hints: ['customer', 'customers', 'segment', 'loyalty', 'city', 'state', 'region'] },
+    { source: 'product', hints: ['product', 'products', 'category', 'brand', 'stock', 'price', 'supplier'] },
+    { source: 'order', hints: ['order', 'orders', 'sales', 'revenue', 'subtotal', 'discount', 'profit', 'channel', 'status'] },
+    { source: 'item', hints: ['item', 'items', 'line item', 'quantity', 'product', 'category', 'sales amount', 'profit'] },
+    { source: 'payment', hints: ['payment', 'payments', 'payment method', 'transaction reference', 'paid', 'refunded'] },
+    { source: 'shipment', hints: ['shipment', 'shipments', 'carrier', 'delivery', 'delivered', 'shipping'] },
+    { source: 'return', hints: ['return', 'returns', 'refund', 'reason', 'returned'] },
     { source: 'transaction', hints: ['transaction', 'transactions', 'amount', 'merchant', 'payment', 'category'] },
     { source: 'account', hints: ['account', 'accounts', 'balance', 'account type'] },
     { source: 'investment', hints: ['investment', 'investments', 'symbol', 'asset', 'market value'] },
@@ -831,6 +844,23 @@ const formatFilter = (filter = {}) => {
   return `${filter.field} ${operatorText} ${formatFilterValue(filter.value)}`;
 };
 
+const dedupeSpecificFilters = (filters = []) => filters.filter((filter, index) => {
+  const label = normalizeLabel(filter.field);
+  const value = JSON.stringify(filter.value ?? '');
+  const operator = filter.operator || '';
+  const hasMoreSpecificDuplicate = filters.some((other, otherIndex) => {
+    if (otherIndex === index) return false;
+    const otherLabel = normalizeLabel(other.field);
+    const otherValue = JSON.stringify(other.value ?? '');
+    const otherOperator = other.operator || '';
+    return otherValue === value &&
+      otherOperator === operator &&
+      otherLabel !== label &&
+      otherLabel.endsWith(` ${label}`);
+  });
+  return !hasMoreSpecificDuplicate;
+});
+
 const countFieldValueAliases = [
   'age',
   'amount',
@@ -872,6 +902,7 @@ const countQuestionWantsRowCount = (query, requestedField, filters = []) => {
   const requestedLabel = normalizeLabel(requestedField);
   if (!/\b(how many|count|number of)\b/.test(normalized)) return false;
   if (/\b(rows|documents|records)\b/.test(normalized)) return true;
+  if (filters.length > 0 && (!requestedField || filters.some((filter) => findFieldByLabel([requestedField], filter.field)))) return true;
   if (!requestedField) return false;
   if (countQuestionWantsFieldValue(query, requestedField, filters)) return false;
   return /\b(name|id)\b/.test(requestedLabel);
@@ -928,6 +959,8 @@ const extractDatabaseQuestion = (query, schema) => {
     const value = fragment.split(/\s+/).slice(0, 4).join(' ');
     if (value) filters.push({ field, value, type: 'value' });
   }
+
+  filters.splice(0, filters.length, ...dedupeSpecificFilters(filters));
 
   requestedFields = uniqueValues(requestedFields).filter((field) => (
     !filters.some((filter) => findFieldByLabel([field], filter.field))

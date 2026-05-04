@@ -6,6 +6,12 @@
     "description": "Local MongoDB database"
   },
   {
+    "id": "sales-demo",
+    "type": "mongodb",
+    "uri": "mongodb://localhost:27017/sales_demo_mcp",
+    "description": "Local sales demo database. Run cd backend && npm run seed:sales first."
+  },
+  {
     "id": "warehouse",
     "type": "postgres",
     "uri": "postgres://user:password@localhost:5432/warehouse",

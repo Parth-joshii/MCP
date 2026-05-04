@@ -22,6 +22,7 @@ A local MCP-based application where an AI agent can inspect, query, and safely m
 cd backend
 npm install
 # Optional: node seed.js loads the included sample MongoDB data.
+# Optional: npm run seed:sales creates the sales_demo_mcp demo database.
 ```
 
 ### 2. Analytics Service Setup
