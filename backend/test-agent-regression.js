@@ -24,6 +24,14 @@ const cases = [
     rows: (rows) => rows.length === 1 && rows[0].customer_id === 'CUST-0001'
   },
   {
+    name: 'delivery status does not create generic status filter',
+    databaseId: 'sales-demo',
+    query: 'what is the delivery_status of ORD-00001',
+    includes: ['order_id: ORD-00001', 'delivery_status: delivered', 'Source: shipments', 'Filter: order_id = ord 00001'],
+    excludes: ['status = ord-00001'],
+    rows: (rows) => rows.length === 1 && rows[0].order_id === 'ORD-00001' && rows[0].delivery_status === 'delivered'
+  },
+  {
     name: 'return product query maps to returns product_name',
     databaseId: 'sales-demo',
     query: 'customer_name, and refund_amount who returns Laptop Stand',
@@ -88,6 +96,13 @@ const run = async () => {
       assert(
         result.response.includes(expected),
         `${item.name}: response did not include "${expected}"\n${result.response}`
+      );
+    }
+
+    for (const unexpected of item.excludes || []) {
+      assert(
+        !result.response.includes(unexpected),
+        `${item.name}: response should not include "${unexpected}"\n${result.response}`
       );
     }
 

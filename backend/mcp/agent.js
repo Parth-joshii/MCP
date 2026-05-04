@@ -342,6 +342,14 @@ const removeShadowedFieldMatches = (fields = []) => {
   });
 };
 
+const fieldIsShadowedBy = (field, fields = []) => {
+  const label = normalizeLabel(field);
+  if (!label) return false;
+  return fields
+    .map(normalizeLabel)
+    .some((otherLabel) => otherLabel && otherLabel !== label && otherLabel.endsWith(` ${label}`));
+};
+
 const entityRequestedFieldHints = [
   { pattern: /\b(players?|batters?|batsmen|bowlers?|keepers?|all rounders?|allrounders?)\b/, labels: ['player_name', 'player name'] },
   { pattern: /\b(customers?|clients?|users?)\b/, labels: ['customer_name', 'customer name', 'user_name', 'user name', 'name'] },
@@ -628,6 +636,7 @@ const extractComparisonFiltersFromFields = (query, fields = [], ignoredFields = 
 
   for (const field of fields) {
     if (!field || ignored.has(field) || filters.some((filter) => filter.field === field)) continue;
+    if (fieldIsShadowedBy(field, ignoredFields)) continue;
     const label = normalizeLabel(field);
     const match = label ? labelBoundaryRegex(label).exec(normalized) : null;
     if (!match) continue;
@@ -1069,6 +1078,7 @@ const extractDatabaseQuestion = (query, schema) => {
     if (
       field === requestedField ||
       requestedFields.some((requested) => field === requested || Boolean(findFieldByLabel([field], requested))) ||
+      fieldIsShadowedBy(field, [requestedField, ...requestedFields]) ||
       filters.some((filter) => filter.field === field)
     ) continue;
     const label = normalizeLabel(field);
