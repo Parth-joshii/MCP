@@ -349,6 +349,7 @@ const entityRequestedFieldHints = [
   { pattern: /\b(teams?|clubs?)\b/, labels: ['team_name', 'team name'] },
   { pattern: /\b(accounts?)\b/, labels: ['account_id', 'account id', 'account_name', 'account name'] },
   { pattern: /\b(orders?)\b/, labels: ['order_id', 'order id'] },
+  { pattern: /\b(returns?|refunds?)\b/, labels: ['return_id', 'return id'] },
   { pattern: /\b(transactions?)\b/, labels: ['transaction_id', 'transaction id'] },
   { pattern: /\bmatches?(?!\s+played)\b/, labels: ['match_id', 'match id'] }
 ];
@@ -383,7 +384,7 @@ const implicitFilterStopWords = new Set([
   'row', 'rows', 'table', 'collection', 'details', 'detail', 'info', 'information', 'informations',
   'account', 'accounts', 'client', 'clients', 'customer', 'customers', 'order', 'orders',
   'item', 'items', 'line', 'product', 'products', 'player', 'players', 'transaction',
-  'transactions', 'user', 'users'
+  'transactions', 'return', 'returns', 'returned', 'refund', 'refunds', 'refunded', 'user', 'users'
 ]);
 
 const cleanImplicitFilterValue = (value = '') => normalizeLabel(value)
@@ -392,9 +393,37 @@ const cleanImplicitFilterValue = (value = '') => normalizeLabel(value)
   .join(' ')
   .trim();
 
+const idPrefixIdentifierHints = [
+  { pattern: /\bret\s*\d+\b/, labels: ['return_id', 'return id'] },
+  { pattern: /\bord\s*\d+\b/, labels: ['order_id', 'order id'] },
+  { pattern: /\bcust\s*\d+\b/, labels: ['customer_id', 'customer id'] },
+  { pattern: /\bprd\s*\d+\b/, labels: ['product_id', 'product id'] },
+  { pattern: /\bpay\s*\d+\b/, labels: ['payment_id', 'payment id'] },
+  { pattern: /\bshp\s*\d+\b/, labels: ['shipment_id', 'shipment id'] },
+  { pattern: /\bitem\s*\d+\b/, labels: ['line_item_id', 'line item id', 'item_id', 'item id'] },
+  { pattern: /\btxn\s*\d+\b/, labels: ['transaction_id', 'transaction id'] },
+  { pattern: /\bply\s*\d+\b/, labels: ['player_id', 'player id'] },
+  { pattern: /\bteam\s*\d+\b/, labels: ['team_id', 'team id'] },
+  { pattern: /\bacc\s*\d+\b/, labels: ['account_id', 'account id'] }
+];
+
+const findIdentifierFieldByIdPrefix = (fields = [], requested = new Set(), context = '') => {
+  for (const hint of idPrefixIdentifierHints) {
+    if (!hint.pattern.test(context)) continue;
+    for (const label of hint.labels) {
+      const field = findFieldByLabel(fields, label);
+      if (field && !requested.has(field)) return field;
+    }
+  }
+  return null;
+};
+
 const findImplicitIdentifierField = (fields = [], requestedFields = [], contextPhrase = '', sources = []) => {
   const requested = new Set(requestedFields.filter(Boolean));
   const context = normalizeLabel(contextPhrase);
+  const prefixField = findIdentifierFieldByIdPrefix(fields, requested, context);
+  if (prefixField) return prefixField;
+
   const contextualCandidates = [
     { pattern: /\baccounts?\b/, labels: ['account_id', 'account id', 'account_name', 'account name'] },
     { pattern: /\bclients?\b|\bcustomers?\b/, labels: ['customer_name', 'customer name', 'name'] },
@@ -402,6 +431,7 @@ const findImplicitIdentifierField = (fields = [], requestedFields = [], contextP
     { pattern: /\borders?\b/, labels: ['order_id', 'order id'] },
     { pattern: /\bproducts?\b|\bitems?\b|\bline items?\b/, labels: ['product_name', 'product name', 'item_name', 'item name', 'name'] },
     { pattern: /\bplayers?\b/, labels: ['player_name', 'player name', 'name'] },
+    { pattern: /\breturns?\b|\brefunds?\b/, labels: ['return_id', 'return id'] },
     { pattern: /\bteams?\b/, labels: ['team_name', 'team name', 'name'] },
     { pattern: /\btransactions?\b|\btxn\b/, labels: ['transaction_id', 'transaction id'] },
     { pattern: /\busers?\b/, labels: ['user_name', 'user name', 'name'] }
@@ -432,6 +462,8 @@ const findImplicitIdentifierField = (fields = [], requestedFields = [], contextP
     'account id',
     'order_id',
     'order id',
+    'return_id',
+    'return id',
     'transaction_id',
     'transaction id',
     'match_id',
