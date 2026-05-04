@@ -172,7 +172,43 @@ Official MCP transports:
 -   **stdio**: `cd backend && npm run mcp:stdio`
 -   **Streamable HTTP**: start the backend with `npm start`, then connect MCP clients to `http://localhost:5000/mcp`
 
-The older app endpoints under `/api/mcp/*` still exist for the React chat UI and manual debugging, but the official MCP server is exposed through `npm run mcp:stdio` and `/mcp`.
+The React chat UI uses `/api/mcp/chat` as an in-app MCP client facade. The official MCP server for external MCP clients is exposed through `npm run mcp:stdio` and `/mcp`.
+
+Proper MCP workflow:
+```text
+MCP client initializes the server
+-> client lists tools, resources, and prompts
+-> client selects a database or document source
+-> client reads schema/metadata resource or calls describe
+-> model plans a safe structured tool call
+-> MCP tool executes against the database/document
+-> tool returns structured content
+-> model formats the final answer for the user
+```
+
+Database question workflow:
+```text
+User question
+-> database.list_connections when source is unknown
+-> database.describe or database://{databaseId}/schema
+-> safe plan: find, count, distinct, aggregate, or snapshot edit preview
+-> database.query / snapshot tool
+-> structured rows/counts/values
+-> final Answer + Details response
+```
+
+Document question workflow:
+```text
+User question
+-> document.list_sources when source is unknown
+-> document.describe or document://{documentId}/metadata
+-> document.answer_text_question for PDF/Word/text
+-> document.answer_table_question or document.query_table for Excel/CSV
+-> structured evidence/rows
+-> final Answer + Details response
+```
+
+The Agent page shows this workflow trace under each answer so you can verify which MCP stage and tool were used.
 
 Core MCP tools:
 -   `database.list_connections`

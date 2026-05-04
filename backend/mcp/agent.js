@@ -4026,6 +4026,90 @@ const formatMultiQueryResponse = (items) => items
   })
   .join('\n\n');
 
+const splitToolNames = (toolUsed = '') => String(toolUsed || '')
+  .split(',')
+  .map((tool) => tool.trim())
+  .filter(Boolean);
+
+const workflowTargetLabel = (context = {}, toolNames = []) => {
+  if (toolNames.some((tool) => tool.startsWith('database.')) || context.scope === 'database') {
+    return context.databaseId ? `databaseId: ${context.databaseId}` : 'database: discover from MCP';
+  }
+  if (toolNames.some((tool) => tool.startsWith('document.')) || context.scope === 'document') {
+    return context.documentId ? `documentId: ${context.documentId}` : 'document: discover from MCP';
+  }
+  return 'auto source selection';
+};
+
+const buildMcpWorkflowTrace = ({ context = {}, result = {}, multiple = false } = {}) => {
+  const toolNames = splitToolNames(result.toolUsed);
+  const usesDatabase = toolNames.some((tool) => tool.startsWith('database.')) || context.scope === 'database';
+  const usesDocument = toolNames.some((tool) => tool.startsWith('document.')) || context.scope === 'document';
+  const selectedTarget = workflowTargetLabel(context, toolNames);
+
+  const discoveryTool = usesDocument && !usesDatabase
+    ? 'document.list_sources'
+    : usesDatabase && !usesDocument
+      ? 'database.list_connections'
+      : 'database.list_connections / document.list_sources';
+
+  const inspectAction = usesDocument && !usesDatabase
+    ? 'Inspect selected document metadata, sheets, or chunks before answering.'
+    : usesDatabase && !usesDocument
+      ? 'Inspect selected database schema before building the query.'
+      : 'Inspect the selected database schema or document metadata before answering.';
+
+  const inspectTool = usesDocument && !usesDatabase
+    ? 'document.describe or document://... resource'
+    : usesDatabase && !usesDocument
+      ? 'database.describe or database://.../schema resource'
+      : 'database.describe / document.describe';
+
+  return [
+    {
+      stage: 'Initialize',
+      status: 'ready',
+      action: 'MCP server exposes tools, resources, and prompts.',
+      transport: 'stdio or Streamable HTTP /mcp'
+    },
+    {
+      stage: 'Discover',
+      status: context.databaseId || context.documentId ? 'selected' : 'available',
+      action: 'Discover available sources or use the source selected by the client UI.',
+      tool: discoveryTool,
+      target: selectedTarget
+    },
+    {
+      stage: 'Inspect',
+      status: result.toolUsed ? 'completed' : 'skipped',
+      action: inspectAction,
+      tool: inspectTool
+    },
+    {
+      stage: 'Plan',
+      status: result.toolUsed ? 'completed' : 'not_required',
+      action: 'Map the user question to a safe MCP tool call with structured arguments.',
+      planner: 'trusted extractor first, Llama planner only when needed'
+    },
+    {
+      stage: 'Tool Call',
+      status: toolNames.length > 0 ? 'completed' : 'not_required',
+      action: multiple ? 'Execute one MCP tool sequence per sub-question.' : 'Execute the selected MCP tool.',
+      tool: toolNames.length > 0 ? toolNames.join(', ') : 'none'
+    },
+    {
+      stage: 'Answer',
+      status: result.error ? 'error' : 'completed',
+      action: 'Return structured tool result and a concise final answer to the client.'
+    }
+  ];
+};
+
+const withMcpWorkflowTrace = (result = {}, context = {}, options = {}) => ({
+  ...result,
+  mcpWorkflow: result.mcpWorkflow || buildMcpWorkflowTrace({ context, result, ...options })
+});
+
 const section = (title, lines = []) => {
   const cleanLines = lines.filter((line) => line !== null && line !== undefined && String(line).trim() !== '');
   if (cleanLines.length === 0) return '';
@@ -4246,7 +4330,8 @@ const processQuery = async (query, context = {}) => {
     const promptRewrite = await preparePromptForQuery(query, context);
     const promptContext = { ...context, promptRewrite };
     const result = await processSingleQuery(promptRewrite.optimized, promptContext);
-    return shouldExposePromptRewrite(promptRewrite) ? { ...result, promptRewrite } : result;
+    const tracedResult = withMcpWorkflowTrace(result, promptContext);
+    return shouldExposePromptRewrite(promptRewrite) ? { ...tracedResult, promptRewrite } : tracedResult;
   }
 
   const sessionKey = getSessionKey(context);
@@ -4268,7 +4353,8 @@ const processQuery = async (query, context = {}) => {
     const beforeDatabaseMutation = pendingDatabaseMutations.get(sessionKey);
     const promptRewrite = await preparePromptForQuery(subquery, context);
     const promptContext = { ...context, promptRewrite };
-    const result = await processSingleQuery(promptRewrite.optimized, promptContext);
+    const rawResult = await processSingleQuery(promptRewrite.optimized, promptContext);
+    const result = withMcpWorkflowTrace(rawResult, promptContext);
     const exposePromptRewrite = shouldExposePromptRewrite(promptRewrite);
     results.push({
       query: subquery,
@@ -4290,7 +4376,7 @@ const processQuery = async (query, context = {}) => {
     .map((item) => item.result?.toolUsed)
     .filter(Boolean);
 
-  return {
+  return withMcpWorkflowTrace({
     response: formatMultiQueryResponse(results),
     toolUsed: tools.length > 0 ? Array.from(new Set(tools)).join(', ') : undefined,
     toolResult: {
@@ -4307,7 +4393,7 @@ const processQuery = async (query, context = {}) => {
       ? results.map((item) => item.promptRewrite).filter(Boolean)
       : undefined,
     isError: results.some((item) => item.result?.isError || item.result?.error)
-  };
+  }, context, { multiple: true });
 };
 
 module.exports = { processQuery, optimizePrompt, preparePromptForQuery };

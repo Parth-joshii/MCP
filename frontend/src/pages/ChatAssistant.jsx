@@ -100,7 +100,7 @@ const ChatAssistant = () => {
         context: requestContext
       });
       
-      const { response, toolUsed, toolResult, isError, promptRewrite, llmMongoPlan, llmMongoExtractionPrompt } = res.data;
+      const { response, toolUsed, toolResult, isError, promptRewrite, llmMongoPlan, llmMongoExtractionPrompt, mcpWorkflow } = res.data;
 
       setMessages(prev => [
         ...prev, 
@@ -112,6 +112,7 @@ const ChatAssistant = () => {
           promptRewrite,
           llmMongoPlan,
           llmMongoExtractionPrompt,
+          mcpWorkflow,
           isError
         }
       ]);
@@ -198,6 +199,27 @@ const ChatAssistant = () => {
             ))}
           </tbody>
         </table>
+      </div>
+    );
+  };
+
+  const WorkflowTrace = ({ steps = [] }) => {
+    if (!Array.isArray(steps) || steps.length === 0) return null;
+
+    return (
+      <div className="text-xs text-gray-600 bg-white p-2 rounded border border-gray-200 mt-1">
+        <div className="font-semibold text-gray-700 mb-1">MCP Workflow</div>
+        <div className="grid gap-1">
+          {steps.map((step, stepIndex) => (
+            <div key={`${step.stage}-${stepIndex}`} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="font-mono text-gray-500">{stepIndex + 1}</span>
+              <span className="font-medium text-gray-700">{step.stage}</span>
+              <span className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] text-gray-600">{step.status}</span>
+              {step.tool && <span className="font-mono text-gray-500">{step.tool}</span>}
+              {step.target && <span className="font-mono text-gray-500">{step.target}</span>}
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
@@ -309,6 +331,7 @@ const ChatAssistant = () => {
                     <span>Tool Used: <strong className="font-mono">{msg.toolUsed}</strong></span>
                   </div>
                 )}
+                <WorkflowTrace steps={msg.mcpWorkflow} />
                 {msg.llmMongoPlan && (
                   <div className="text-xs text-gray-500 bg-purple-50 p-2 rounded border border-purple-100 mt-1">
                     <div>Mongo planner: <span className="font-mono">{msg.llmMongoPlan.operation} {msg.llmMongoPlan.collection}</span></div>
