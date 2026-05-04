@@ -297,7 +297,7 @@ const fieldMatchQuality = (fields = [], candidate) => {
 const extractDatabaseRequestedField = (query, fields = []) => {
   const normalized = normalizeLabel(query);
   const phraseMatch = normalized.match(
-    /^(?:what is|what are|whats|which|show|show me|tell me|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|by|where|when|with|whose|that|which|from|in|on)\s+|$)/
+    /^(?:what is|what are|whats|which|show|show me|tell|tell me|give|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|by|where|when|with|whose|that|which|from|in|on)\s+|$)/
   );
   const fieldFromPhrase = findFieldByLabel(fields, phraseMatch?.[1]);
   if (fieldFromPhrase) return fieldFromPhrase;
@@ -353,7 +353,7 @@ const inferDatabaseEntityRequestedFields = (query, fields = []) => {
 
 const implicitFilterStopWords = new Set([
   'the', 'a', 'an', 'this', 'that', 'selected', 'database', 'document', 'record',
-  'row', 'rows', 'table', 'collection', 'details', 'detail', 'info', 'information',
+  'row', 'rows', 'table', 'collection', 'details', 'detail', 'info', 'information', 'informations',
   'account', 'accounts', 'client', 'clients', 'customer', 'customers', 'order', 'orders',
   'player', 'players', 'transaction', 'transactions', 'user', 'users'
 ]);
@@ -442,7 +442,7 @@ const extractImplicitEntityFilters = (query, fields = [], requestedFields = []) 
       field: identifierField,
       value,
       type: 'value',
-      operator: 'contains'
+      operator: value.split(/\s+/).length > 1 ? 'exact' : 'contains'
     }];
   }
 
@@ -547,7 +547,7 @@ const coerceQueryValue = (value) => {
 const extractDatabaseRequestedFields = (query, fields = []) => {
   const normalized = normalizeLabel(query);
   const phraseMatch = normalized.match(
-    /^(?:what is|what are|whats|which|show|show me|tell me|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|by|where|when|with|whose|that|which|from|in|on)\s+|$)/
+    /^(?:what is|what are|whats|which|show|show me|tell|tell me|give|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|by|where|when|with|whose|that|which|from|in|on)\s+|$)/
   );
   const phrase = phraseMatch?.[1] || '';
   const fromPhrase = phrase
@@ -573,7 +573,7 @@ const extractDatabaseRequestedFields = (query, fields = []) => {
 
 const wantsDatabaseFullRowDetails = (query) => {
   const normalized = normalizeLabel(query);
-  return /\b(details|detail|full details|record|records|row|rows|all data|all details|information|info|profile)\b/.test(normalized);
+  return /\b(details|detail|full details|record|records|row|rows|all data|all details|information|informations|info|profile)\b/.test(normalized);
 };
 
 const getDatabaseSourcesFromSchema = (schema = {}) => {
@@ -635,17 +635,30 @@ const selectDatabaseSources = (query, sources, requestedFields, filters) => {
   const requestedList = Array.isArray(requestedFields)
     ? requestedFields.filter(Boolean)
     : [requestedFields].filter(Boolean);
+  const normalized = normalizeLabel(query);
   return sources
     .map((source, index) => {
       const fields = source.fields || [];
       const matchedRequested = requestedList.filter((field) => findFieldByLabel(fields, field)).length;
       const matchedFilters = filters.filter((filter) => findFieldByLabel(fields, filter.field)).length;
+      const profileBoost = /\b(details|detail|information|informations|profile|all data|all details)\b/.test(normalized)
+        ? filters.reduce((score, filter) => {
+          const fieldLabel = normalizeLabel(filter.field);
+          const sourceLabel = normalizeLabel(source.name || source.table || '');
+          if (fieldLabel.includes('player') && sourceLabel.includes('player')) return score + 20;
+          if (fieldLabel.includes('customer') && sourceLabel.includes('customer')) return score + 20;
+          if (fieldLabel.includes('account') && sourceLabel.includes('account')) return score + 20;
+          if (fieldLabel.includes('transaction') && sourceLabel.includes('transaction')) return score + 20;
+          if (fieldLabel.includes('team') && sourceLabel.includes('team')) return score + 20;
+          return score;
+        }, 0)
+        : 0;
       const hasEnoughRequestedFields = requestedList.length <= 1
         ? matchedRequested > 0 || requestedList.length === 0
         : matchedRequested === requestedList.length;
       const hasEnoughFilters = filters.length === 0 || matchedFilters === filters.length;
       const score = sourceMentionScore(query, source) + matchedRequested * 5 + matchedFilters * 3 + Math.min(source.rowCountEstimate || 0, 1000) / 1000;
-      return { source, score, index, hasEnoughRequestedFields, hasEnoughFilters };
+      return { source, score: score + profileBoost, index, hasEnoughRequestedFields, hasEnoughFilters };
     })
     .filter((item) => item.score > 0 && item.hasEnoughRequestedFields && item.hasEnoughFilters)
     .sort((a, b) => b.score - a.score || a.index - b.index)
@@ -3059,7 +3072,7 @@ const hasStrongDeterministicMongoPlan = (query, schema = {}, question = {}) => {
 
   const normalized = normalizeLabel(query);
   return requestedFields.length > 0 &&
-    /\b(what|which|who|show|list|find|get|tell me|give me|provide)\b/.test(normalized);
+    /\b(what|which|who|show|list|find|get|tell|tell me|give|give me|provide)\b/.test(normalized);
 };
 
 const runDatabaseQuestion = async (query, context = {}) => {
@@ -3067,7 +3080,7 @@ const runDatabaseQuestion = async (query, context = {}) => {
   if (scope === 'document') return null;
 
   const normalized = normalizeForIntent(query);
-  if (!/\b(what|which|who|when|where|how many|count|number of|show|find|get|tell me|give me|provide me|provide)\b/.test(normalized)) {
+  if (!/\b(what|which|who|when|where|how many|count|number of|show|find|get|tell|tell me|give|give me|provide me|provide)\b/.test(normalized)) {
     return null;
   }
 
@@ -3230,7 +3243,7 @@ const runDatabaseQuestion = async (query, context = {}) => {
       })
       .filter(Boolean);
     const contextFields = uniqueValues(filters
-      .filter((filter) => filter.operator === 'contains' && /\b(name|id)\b/.test(normalizeLabel(filter.field)))
+      .filter((filter) => ['contains', 'exact'].includes(filter.operator) && /\b(name|id)\b/.test(normalizeLabel(filter.field)))
       .map((filter) => filter.field)
       .filter((field) => !actualRequestedFields.includes(field)));
     const outputFields = question.fullRowDetails

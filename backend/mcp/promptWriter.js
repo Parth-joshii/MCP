@@ -6,6 +6,7 @@ const typoReplacements = [
   [/\bplz\b|\bpls\b/gi, 'please'],
   [/\bdatebase\b|\bdatabse\b|\bdatbase\b/gi, 'database'],
   [/\bdocumnet\b|\bdocment\b/gi, 'document'],
+  [/\binformations\b/gi, 'information'],
   [/\bqunatity\b|\bquantiy\b|\bqty\b/gi, 'quantity'],
   [/\bprodcut\b|\bprdct\b/gi, 'product'],
   [/\bcust\b|\bcustmer\b|\bcoustomer\b/gi, 'customer'],
@@ -41,6 +42,7 @@ const phraseReplacements = [
   [/\bwhat all\b/gi, 'show'],
   [/\bshow me all\b/gi, 'show'],
   [/\bgive me all\b/gi, 'show'],
+  [/\bgive all\b/gi, 'show'],
   [/\bin the date\b/gi, 'on date'],
   [/\bin date\b/gi, 'on date'],
   [/\bwhere date\b/gi, 'where date'],
@@ -112,7 +114,7 @@ const detectAction = (text = '') => {
   const normalized = text.toLowerCase();
   if (/\b(change|update|set|replace|edit|modify|delete|add)\b/.test(normalized)) return 'mutation';
   if (/\b(total|sum|average|avg|group|top|highest|lowest|count|how many|number of)\b/.test(normalized)) return 'analytics';
-  if (/\b(details|detail|record|row|all data|information|info)\b/.test(normalized)) return 'details';
+  if (/\b(details|detail|record|row|all data|information|informations|info)\b/.test(normalized)) return 'details';
   if (/\b(describe|schema|columns|fields|tables|collections)\b/.test(normalized)) return 'schema';
   if (/\b(search|find)\b/.test(normalized)) return 'search';
   return 'query';
