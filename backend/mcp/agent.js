@@ -268,7 +268,7 @@ const fieldMatchQuality = (fields = [], candidate) => {
 const extractDatabaseRequestedField = (query, fields = []) => {
   const normalized = normalizeLabel(query);
   const phraseMatch = normalized.match(
-    /^(?:what is|what are|whats|which|show|show me|tell me|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|where|when|with|from|in|on)\s+|$)/
+    /^(?:what is|what are|whats|which|show|show me|tell me|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|by|where|when|with|from|in|on)\s+|$)/
   );
   const fieldFromPhrase = findFieldByLabel(fields, phraseMatch?.[1]);
   if (fieldFromPhrase) return fieldFromPhrase;
@@ -369,14 +369,14 @@ const findImplicitIdentifierField = (fields = [], requestedFields = []) => {
 
 const extractImplicitEntityFilters = (query, fields = [], requestedFields = []) => {
   const normalized = normalizeLabel(query);
-  if (!/\b(of|for|about)\b/.test(normalized)) return [];
+  if (!/\b(of|for|about|by|named|called)\b/.test(normalized)) return [];
 
   const requested = requestedFields.filter(Boolean);
   const identifierField = findImplicitIdentifierField(fields, requested);
   if (!identifierField) return [];
 
   const patterns = [
-    /\b(?:of|for|about)\s+(?:the\s+)?(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/,
+    /\b(?:of|for|about|by)\s+(?:the\s+)?(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/,
     /\b(?:named|called)\s+(.+?)(?=\s+(?:where|with|whose|who|which|that|having|and)\b|$)/
   ];
 
@@ -487,7 +487,7 @@ const coerceQueryValue = (value) => {
 const extractDatabaseRequestedFields = (query, fields = []) => {
   const normalized = normalizeLabel(query);
   const phraseMatch = normalized.match(
-    /^(?:what is|what are|whats|which|show|show me|tell me|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|where|when|with|from|in|on)\s+|$)/
+    /^(?:what is|what are|whats|which|show|show me|tell me|give me|get|find|how many)\s+(?:the\s+)?(.+?)(?=\s+(?:of|for|by|where|when|with|from|in|on)\s+|$)/
   );
   const phrase = phraseMatch?.[1] || '';
   const fromPhrase = phrase
@@ -739,6 +739,42 @@ const formatFilter = (filter = {}) => {
   return `${filter.field} ${operatorText} ${formatFilterValue(filter.value)}`;
 };
 
+const countFieldValueAliases = [
+  'age',
+  'amount',
+  'average',
+  'balance',
+  'budget',
+  'economy rate',
+  'fours',
+  'income',
+  'matches played',
+  'played',
+  'price',
+  'quantity',
+  'rate',
+  'revenue',
+  'runs',
+  'salary',
+  'score',
+  'sixes',
+  'strike rate',
+  'total',
+  'wickets'
+];
+
+const countQuestionWantsFieldValue = (query, requestedField, filters = []) => {
+  const normalized = normalizeLabel(query);
+  const requestedLabel = normalizeLabel(requestedField);
+  if (!/\b(how many|count|number of)\b/.test(normalized)) return false;
+  if (!requestedField || filters.length === 0) return false;
+  if (/\b(id|name)\b/.test(requestedLabel)) return false;
+
+  return countFieldValueAliases.some((alias) => (
+    requestedLabel.includes(alias) || normalized.includes(alias)
+  ));
+};
+
 const extractDatabaseQuestion = (query, schema) => {
   const normalized = normalizeLabel(query);
   const sources = getDatabaseSourcesFromSchema(schema);
@@ -781,10 +817,10 @@ const extractDatabaseQuestion = (query, schema) => {
     if (!match) continue;
 
     let fragment = normalized.slice(match.index + match[0].length).trim();
-    fragment = fragment.replace(/^(is|equals|equal to|equal|with|for|of|on|where|as|to|in)\s+/, '').trim();
+    fragment = fragment.replace(/^(is|equals|equal to|equal|with|for|of|by|on|where|as|to|in)\s+/, '').trim();
     if (!fragment) continue;
 
-    const stopMatch = fragment.match(/\s+(?:and|where|with|in|on|for)\s+/);
+    const stopMatch = fragment.match(/\s+(?:and|where|with|in|on|for|by)\s+/);
     if (stopMatch) fragment = fragment.slice(0, stopMatch.index).trim();
     const value = fragment.split(/\s+/).slice(0, 4).join(' ');
     if (value) filters.push({ field, value, type: 'value' });
@@ -795,7 +831,9 @@ const extractDatabaseQuestion = (query, schema) => {
   ));
   requestedField = requestedFields[0] || requestedField;
 
+  const wantsFieldValueForCount = countQuestionWantsFieldValue(query, requestedField, filters);
   const wantsDistinctCount = isCountQuery &&
+    !wantsFieldValueForCount &&
     requestedFields.length <= 1 &&
     requestedField &&
     !/\b(rows|documents|records)\b/.test(normalized);
@@ -806,6 +844,7 @@ const extractDatabaseQuestion = (query, schema) => {
     requestedFields,
     filters,
     fullRowDetails,
+    wantsFieldValueForCount,
     wantsDistinctCount
   };
 };
@@ -2229,6 +2268,16 @@ const validateMongoPlannerPlan = (plan = {}, schema = {}, query = '') => {
   const fields = source.fields || [];
   const limit = Math.max(1, Math.min(Number(plan.limit || 20) || 20, TABLE_ANSWER_LIMIT));
   const expectedEntityFields = inferDatabaseEntityRequestedFields(query, fields);
+  const deterministicQuestion = extractDatabaseQuestion(query, schema);
+  const deterministicRequestedFields = deterministicQuestion.requestedFields?.length
+    ? deterministicQuestion.requestedFields
+    : [deterministicQuestion.requestedField].filter(Boolean);
+  if (deterministicQuestion.wantsFieldValueForCount && deterministicRequestedFields.length > 0) {
+    const sourceHasRequestedField = deterministicRequestedFields.some((field) => findFieldByLabel(fields, field));
+    if (!sourceHasRequestedField) {
+      return { ok: false, reason: 'Planner selected a collection that cannot return the requested count/stat field.' };
+    }
+  }
   const args = {
     collection,
     operation,
@@ -2352,6 +2401,35 @@ const applyDetectedMongoConstraints = (validation = {}, query = '', schema = {})
   const implicitIdentifierFields = detectedFilters
     .filter((filter) => filter.operator === 'contains' && /\b(name|id)\b/.test(normalizeLabel(filter.field)))
     .map((filter) => filter.field);
+
+  if (question.wantsFieldValueForCount) {
+    const deterministicRequestedFields = question.requestedFields?.length
+      ? question.requestedFields
+      : [question.requestedField].filter(Boolean);
+    const actualRequestedFields = deterministicRequestedFields
+      .map((field) => findFieldByLabel(fields, field))
+      .filter(Boolean);
+    if (actualRequestedFields.length === 0) {
+      return {
+        ...validation,
+        ok: false,
+        reason: 'Planner selected a collection that cannot return the requested count/stat field.'
+      };
+    }
+
+    args.operation = 'find';
+    plan.operation = 'find';
+    args.projection = uniqueValues([...implicitIdentifierFields, ...actualRequestedFields]).reduce((acc, field) => {
+      acc[field] = 1;
+      return acc;
+    }, { _id: 0 });
+    plan.projection = args.projection;
+    delete args.field;
+    delete plan.field;
+    delete args.pipeline;
+    delete plan.pipeline;
+  }
+
   if (args.operation === 'distinct' && implicitIdentifierFields.length > 0 && args.field) {
     args.operation = 'find';
     plan.operation = 'find';
@@ -2686,6 +2764,10 @@ Return this JSON shape:
       return null;
     }
     validation = applyDetectedMongoConstraints(validation, query, schema);
+    if (!validation.ok) {
+      console.warn('LLM Mongo planner rejected:', validation.reason);
+      return null;
+    }
 
     const toolResult = await withTimeout(
       executeTool('database.query', {

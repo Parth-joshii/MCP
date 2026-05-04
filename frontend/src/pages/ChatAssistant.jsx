@@ -134,11 +134,17 @@ const ChatAssistant = () => {
     if (message.role !== 'assistant') return null;
 
     const data = message.toolResult?.structuredContent;
-    const rows = Array.isArray(data?.rows)
+    const rawRows = Array.isArray(data?.rows)
       ? data.rows
       : Array.isArray(data) && message.toolUsed === 'database.query'
         ? data
         : [];
+
+    const rows = rawRows.map((row) => (
+      row && typeof row === 'object' && !Array.isArray(row)
+        ? row
+        : { value: row }
+    ));
 
     if (rows.length === 0) return null;
 
