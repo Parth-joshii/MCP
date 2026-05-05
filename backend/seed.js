@@ -1,14 +1,53 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
-const xlsx = require('xlsx');
-const path = require('path');
 const User = require('./models/User');
 const Product = require('./models/Product');
 const Order = require('./models/Order');
 const Rule = require('./models/Rule');
+const { createRandom, money } = require('./seed-sales-demo');
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/ai-ecommerce';
+const DEMO_SEED = process.env.DEMO_SEED || `${Date.now()}-${Math.random()}`;
+const random = createRandom(`sample-app:${DEMO_SEED}`);
+const BASE_DATE = process.env.DEMO_BASE_DATE
+  ? new Date(`${process.env.DEMO_BASE_DATE}T00:00:00.000Z`)
+  : new Date();
+
+const choice = (items) => items[Math.floor(random() * items.length)];
+const dateDaysAgo = (days) => {
+  const date = new Date(BASE_DATE);
+  date.setUTCDate(date.getUTCDate() - days);
+  return date;
+};
+
+const productCatalog = [
+  ['Noise Cancelling Headphones', 'Electronics', 7999],
+  ['Wireless Mouse', 'Electronics', 1299],
+  ['Mechanical Keyboard', 'Electronics', 4599],
+  ['USB-C Hub', 'Electronics', 2499],
+  ['Running Shoes', 'Footwear', 3499],
+  ['Formal Shoes', 'Footwear', 4299],
+  ['Cotton T-Shirt', 'Apparel', 799],
+  ['Denim Jacket', 'Apparel', 2999],
+  ['Office Chair', 'Furniture', 8999],
+  ['Laptop Stand', 'Accessories', 1799],
+  ['Bluetooth Speaker', 'Electronics', 3299],
+  ['Backpack', 'Accessories', 1899]
+];
+
+const locations = [
+  { region: 'West', state: 'Maharashtra', city: 'Mumbai' },
+  { region: 'West', state: 'Gujarat', city: 'Ahmedabad' },
+  { region: 'North', state: 'Delhi', city: 'Delhi' },
+  { region: 'North', state: 'Rajasthan', city: 'Jaipur' },
+  { region: 'South', state: 'Karnataka', city: 'Bengaluru' },
+  { region: 'South', state: 'Tamil Nadu', city: 'Chennai' },
+  { region: 'South', state: 'Telangana', city: 'Hyderabad' },
+  { region: 'East', state: 'West Bengal', city: 'Kolkata' },
+  { region: 'West', state: 'Maharashtra', city: 'Pune' },
+  { region: 'Central', state: 'Madhya Pradesh', city: 'Indore' }
+];
 
 const seedDatabase = async () => {
   try {
@@ -31,59 +70,39 @@ const seedDatabase = async () => {
       role: 'admin'
     });
 
-    // Parse Excel File
-    const excelFilePath = path.join(__dirname, '..', 'Sales_Data_100_Rows.xlsx');
-    const workbook = xlsx.readFile(excelFilePath);
-    const sheetName = workbook.SheetNames[0];
-    const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
-
-    // Extract unique products
-    const productMap = new Map();
-    data.forEach(row => {
-      if (!productMap.has(row.Product)) {
-        productMap.set(row.Product, {
-          name: row.Product,
-          category: 'General', // Default category
-          price: row['Price per Unit'],
-          stock: Math.floor(Math.random() * 100) + 10, // Random stock between 10 and 110
-          status: 'active'
-        });
-      }
-    });
-
-    const products = await Product.insertMany(Array.from(productMap.values()));
+    const products = await Product.insertMany(productCatalog.map(([name, category, price], index) => ({
+      name,
+      category,
+      price,
+      stock: Math.floor(15 + random() * 180),
+      status: index % 11 === 0 ? 'inactive' : 'active'
+    })));
     console.log(`Seeded ${products.length} Unique Products`);
 
-    // Create a map to quickly find product ObjectIds
-    const productIds = {};
-    products.forEach(p => {
-      productIds[p.name] = p._id;
-    });
-
-    // Seed Orders
-    const ordersData = data.map(row => {
-      // Parse DD-MM-YYYY
-      const [day, month, year] = row['Sale Date'].split('-');
-      const orderDate = new Date(`${year}-${month}-${day}`);
-
+    const orderCount = Number(process.env.SAMPLE_ORDER_COUNT || 160);
+    const statuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
+    const ordersData = Array.from({ length: orderCount }, (_, index) => {
+      const product = choice(products);
+      const quantity = 1 + Math.floor(random() * 6);
+      const location = locations[index % locations.length];
       return {
         user: adminUser._id,
         items: [{
-          product: productIds[row.Product],
-          quantity: row.Quantity,
-          price: row['Price per Unit']
+          product: product._id,
+          quantity,
+          price: product.price
         }],
-        totalAmount: row['Sales Amount'],
-        status: 'delivered', // Assume historical data is delivered
-        region: row.Region,
-        state: row.State,
-        city: row.City,
-        date: orderDate
+        totalAmount: money(product.price * quantity * (0.9 + random() * 0.25)),
+        status: index % 19 === 0 ? 'cancelled' : choice(statuses),
+        region: location.region,
+        state: location.state,
+        city: location.city,
+        date: dateDaysAgo(Math.floor(random() * 420))
       };
     });
 
     await Order.insertMany(ordersData);
-    console.log(`Seeded ${ordersData.length} Orders from Excel`);
+    console.log(`Seeded ${ordersData.length} dynamic Orders`);
 
     // Seed Automation Rules
     const rulesData = [
@@ -93,6 +112,7 @@ const seedDatabase = async () => {
     await Rule.insertMany(rulesData);
     console.log('Seeded Rules');
 
+    console.log(`Dynamic seed: ${DEMO_SEED}`);
     console.log('Database seeding completed successfully!');
     process.exit(0);
   } catch (error) {

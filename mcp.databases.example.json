@@ -9,7 +9,19 @@
     "id": "sales-demo",
     "type": "mongodb",
     "uri": "mongodb://localhost:27017/sales_demo_mcp",
-    "description": "Local sales demo database. Run cd backend && npm run seed:sales first."
+    "description": "Dynamic local sales demo database. Run cd backend && npm run seed:demos or npm run seed:sales."
+  },
+  {
+    "id": "finance-demo",
+    "type": "mongodb",
+    "uri": "mongodb://localhost:27017/finance_demo_mcp",
+    "description": "Dynamic local finance demo database. Run cd backend && npm run seed:demos or npm run seed:finance."
+  },
+  {
+    "id": "cricket-demo",
+    "type": "mongodb",
+    "uri": "mongodb://localhost:27017/cricket_demo_mcp",
+    "description": "Dynamic local cricket demo database. Run cd backend && npm run seed:demos or npm run seed:cricket."
   },
   {
     "id": "warehouse",

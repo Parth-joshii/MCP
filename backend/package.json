@@ -7,6 +7,11 @@
     "start": "node server.js",
     "test:agent": "node test-agent-regression.js",
     "seed:sales": "node seed-sales-demo.js",
+    "seed:demos": "node seed-dynamic-demos.js",
+    "seed:finance": "node seed-dynamic-demos.js --finance",
+    "seed:cricket": "node seed-dynamic-demos.js --cricket",
+    "seed:sample": "node seed.js",
+    "seed:all": "npm run seed:demos && npm run seed:sample",
     "mcp:stdio": "node mcp-stdio.js"
   },
   "keywords": [],

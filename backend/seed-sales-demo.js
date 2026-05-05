@@ -2,9 +2,23 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 
 const SALES_DEMO_URI = process.env.SALES_DEMO_URI || 'mongodb://localhost:27017/sales_demo_mcp';
+const DEMO_SEED = process.env.DEMO_SEED || `${Date.now()}-${Math.random()}`;
+const SALES_DEMO_ORDER_COUNT = Number(process.env.SALES_DEMO_ORDER_COUNT || 240);
+const SALES_DEMO_BASE_DATE = process.env.DEMO_BASE_DATE
+  ? new Date(`${process.env.DEMO_BASE_DATE}T00:00:00.000Z`)
+  : new Date();
 
-const random = (() => {
-  let seed = 20260504;
+const hashSeed = (value = '') => {
+  let hash = 2166136261;
+  for (const char of String(value)) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const createRandom = (seedValue) => {
+  let seed = hashSeed(seedValue);
   return () => {
     seed |= 0;
     seed = seed + 0x6D2B79F5 | 0;
@@ -12,13 +26,15 @@ const random = (() => {
     t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
-})();
+};
+
+const random = createRandom(`sales:${DEMO_SEED}`);
 
 const choice = (items) => items[Math.floor(random() * items.length)];
 const money = (value) => Math.round(value * 100) / 100;
 const pad = (value, length = 4) => String(value).padStart(length, '0');
 const dateDaysAgo = (days) => {
-  const date = new Date('2026-05-01T00:00:00.000Z');
+  const date = new Date(SALES_DEMO_BASE_DATE);
   date.setUTCDate(date.getUTCDate() - days);
   return date;
 };
@@ -109,7 +125,7 @@ const buildSalesData = (customers, products) => {
   const carriers = ['BlueDart', 'Delhivery', 'Ekart', 'Shiprocket'];
   const reasons = ['damaged', 'late_delivery', 'wrong_item', 'size_issue', 'changed_mind'];
 
-  for (let index = 1; index <= 240; index += 1) {
+  for (let index = 1; index <= SALES_DEMO_ORDER_COUNT; index += 1) {
     const customer = customers[Math.floor(random() * customers.length)];
     const itemCount = 1 + Math.floor(random() * 3);
     const orderDate = dateDaysAgo(Math.floor(random() * 520));
@@ -118,7 +134,9 @@ const buildSalesData = (customers, products) => {
     let costTotal = 0;
 
     for (let itemIndex = 1; itemIndex <= itemCount; itemIndex += 1) {
-      const product = products[Math.floor(random() * products.length)];
+      const product = [1, 19, 29].includes(index) && itemIndex === 1
+        ? products.find((item) => item.product_id === 'PRD-0020') || products[Math.floor(random() * products.length)]
+        : products[Math.floor(random() * products.length)];
       const quantity = 1 + Math.floor(random() * 5);
       const discountRate = choice([0, 0.03, 0.05, 0.08, 0.1, 0.15]);
       const gross = product.unit_price * quantity;
@@ -284,13 +302,24 @@ const seedSalesDemo = async () => {
     };
 
     console.log(`Seeded ${connection.name} at ${SALES_DEMO_URI}`);
+    console.log(`Dynamic seed: ${DEMO_SEED}`);
     console.log(JSON.stringify(counts, null, 2));
   } finally {
     await connection.close();
   }
 };
 
-seedSalesDemo().catch((error) => {
-  console.error('Failed to seed sales demo database:', error);
-  process.exit(1);
-});
+if (require.main === module) {
+  seedSalesDemo().catch((error) => {
+    console.error('Failed to seed sales demo database:', error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  seedSalesDemo,
+  createRandom,
+  hashSeed,
+  money,
+  pad
+};

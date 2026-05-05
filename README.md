@@ -21,8 +21,10 @@ A local MCP-based application where an AI agent can inspect, query, and safely m
 ```bash
 cd backend
 npm install
-# Optional: node seed.js loads the included sample MongoDB data.
-# Optional: npm run seed:sales creates the sales_demo_mcp demo database.
+# Optional: npm run seed:all refreshes every local demo/sample MongoDB database dynamically.
+# Optional: npm run seed:sample refreshes the older app sample MongoDB data dynamically.
+# Optional: npm run seed:demos refreshes sales_demo_mcp, finance_demo_mcp, and cricket_demo_mcp dynamically.
+# Optional: npm run seed:sales refreshes only the sales demo.
 ```
 
 ### 2. Analytics Service Setup
@@ -172,6 +174,19 @@ npm run test:agent
 
 This verifies prefixed ids such as `RET-00002`, `PRD-0020`, and `CUST-0001`, product-name filters, counts, and cricket demo field lookups against the local demo databases.
 
+Refresh the dynamic demo/sample data:
+```bash
+cd backend
+npm run seed:demos      # refresh all MongoDB demo databases
+npm run seed:sales      # refresh only sales_demo_mcp
+npm run seed:finance    # refresh only finance_demo_mcp
+npm run seed:cricket    # refresh only cricket_demo_mcp
+npm run seed:sample     # refresh older ai-ecommerce sample app data
+npm run seed:all        # refresh demos and older sample data
+```
+
+Every run uses a fresh seed by default, so counts, dates, statuses, and numeric values change. Use `DEMO_SEED=my-test-seed` when you want repeatable data for testing.
+
 ## Generic Database MCP Server
 
 The backend includes a generic database MCP server built with the official `@modelcontextprotocol/sdk`. It is not tied to e-commerce data: the MCP server reads database access from configuration, exposes tools/resources/prompts, and lets MCP clients discover schemas before querying.
@@ -291,6 +306,13 @@ MCP_ALLOW_DB_WRITES=false
 MCP_DATABASE_SNAPSHOT_ROW_LIMIT=1000
 MCP_DATABASE_SNAPSHOT_MAX_MUTATION_ROWS=1000
 MCP_DOCUMENT_MAX_MUTATION_ROWS=100
+DEMO_SEED=
+DEMO_BASE_DATE=
+SALES_DEMO_ORDER_COUNT=240
+FINANCE_DEMO_TRANSACTION_COUNT=320
+CRICKET_DEMO_PLAYER_COUNT=80
+CRICKET_DEMO_MATCH_COUNT=64
+SAMPLE_ORDER_COUNT=160
 ```
 
 The Agent page has an **AI assist** checkbox. For MongoDB, the backend now prefers the trusted schema extractor first. If the schema match is strong, the backend directly creates the safe `find`, `count`, `distinct`, or `aggregate` query. If the schema match is not strong enough, Llama must return the `mongo-extraction-v1` JSON contract, then the backend validates it before any MCP tool is executed.
