@@ -7,13 +7,13 @@ A local MCP-based application where an AI agent can inspect, query, and safely m
 1.  **Node.js**: v18+
 2.  **Python**: 3.10+
 3.  **MongoDB**: Installed and running locally on port 27017.
-4.  **Ollama**: Installed locally with the `llama3.2:1b` model downloaded (`ollama run llama3.2:1b`).
+4.  **LLM provider**: Google Gemini API key for cloud LLM support, or Ollama installed locally if you prefer local models.
 
 ## Architecture
 -   **Frontend**: React + Vite + TailwindCSS + Recharts
 -   **Backend**: Node.js + Express.js + Mongoose + MCP Agent System
 -   **Analytics Service**: Python + FastAPI + Pandas
--   **AI**: Local Ollama (`llama3.2:1b` by default)
+-   **AI**: Google Gemini via API key, with optional local Ollama fallback
 
 ## Setup Instructions
 
@@ -50,7 +50,7 @@ npm install
 You can use the provided `start.bat` on Windows, or run these commands in separate terminals:
 
 1.  **MongoDB**: Ensure your local MongoDB server is running.
-2.  **Ollama**: Ensure Ollama is running (`ollama serve`).
+2.  **LLM provider**: If `LLM_PROVIDER=gemini`, no Ollama server is needed. If `LLM_PROVIDER=ollama`, ensure Ollama is running (`ollama serve`).
 3.  **Analytics Service**:
     ```bash
     cd analytics-service
@@ -267,9 +267,9 @@ MCP prompts:
 Prompt layer:
 -   Corrects common typos and shorthand before tool selection, for example `prodcut`, `qty`, `cust name`, and `payement`.
 -   Extracts keywords, dates, comparison filters, and intent hints from the user's prompt.
--   Optional **AI assist** mode sends the corrected prompt to Llama first so messy questions can be rewritten into clearer database/document queries before MCP tool selection.
--   For MongoDB, **AI assist** asks Llama to create a safe read-only extraction prompt/query plan from the selected schema. MongoDB executes that plan, then the extracted result is sent back to Llama for a professional final answer.
--   Passes the corrected prompt plus keyword plan to the Llama chat layer when the deterministic MCP tools need LLM help.
+-   Optional **AI assist** mode sends the corrected prompt to the configured LLM first so messy questions can be rewritten into clearer database/document queries before MCP tool selection.
+-   For MongoDB, **AI assist** asks the configured LLM to create a safe read-only extraction prompt/query plan from the selected schema. MongoDB executes that plan, then the extracted result is sent back to the LLM for a professional final answer.
+-   Passes the corrected prompt plus keyword plan to the configured chat layer when the deterministic MCP tools need LLM help.
 -   Formats final chat responses with `Answer`, `Details`, and `Next` sections where useful.
 
 Useful chat queries:
@@ -285,6 +285,13 @@ Useful chat queries:
 
 Environment configuration:
 ```bash
+LLM_PROVIDER=gemini
+GOOGLE_API_KEY=your_google_api_key
+GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_NUM_PREDICT=256
+GEMINI_API_URL=https://generativelanguage.googleapis.com/v1beta
+
+# Optional local fallback/provider. Use these when LLM_PROVIDER=ollama.
 OLLAMA_MODEL=llama3.2:1b
 OLLAMA_FALLBACK_MODEL=llama3.2:1b
 OLLAMA_NUM_CTX=768
@@ -420,19 +427,28 @@ Example MCP client configuration for stdio:
 }
 ```
 
-The React chat assistant uses Llama by default:
+The React chat assistant uses the configured LLM provider. For Gemini:
+```powershell
+$env:LLM_PROVIDER="gemini"
+$env:GOOGLE_API_KEY="your_google_api_key"
+$env:GEMINI_MODEL="gemini-2.5-flash-lite"
+npm start
+```
+
+For local Ollama instead:
 ```bash
 ollama pull llama3.2:1b
 ```
 
-Then restart the backend. You can also start the backend with:
+Then restart the backend with:
 ```powershell
+$env:LLM_PROVIDER="ollama"
 $env:OLLAMA_MODEL="llama3.2:1b"
 $env:OLLAMA_FALLBACK_MODEL="llama3.2:1b"
 $env:OLLAMA_NUM_CTX="512"
 npm start
 ```
 
-If Ollama reports that the model needs more memory than is available, keep using the deterministic MCP tools or install a smaller Llama-compatible local model and set `OLLAMA_MODEL` to that model name.
+If Ollama reports that the model needs more memory than is available, use Gemini or install a smaller local model and set `OLLAMA_MODEL` to that model name.
 
-The official MCP server does not require Ollama. Ollama is only used by the React chat endpoint at `/api/mcp/chat`; MCP clients can connect directly to `npm run mcp:stdio` or `http://localhost:5000/mcp`.
+The official MCP server does not require Ollama. The React chat endpoint at `/api/mcp/chat` uses Gemini when `LLM_PROVIDER=gemini`, or Ollama when `LLM_PROVIDER=ollama`. MCP clients can connect directly to `npm run mcp:stdio` or `http://localhost:5000/mcp`.
