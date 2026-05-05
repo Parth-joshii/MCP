@@ -11,17 +11,6 @@ const MODEL = process.env.OLLAMA_MODEL || 'llama3.2:1b';
 const FALLBACK_MODEL = process.env.OLLAMA_FALLBACK_MODEL || MODEL;
 const OLLAMA_NUM_CTX = Number(process.env.OLLAMA_NUM_CTX || 768);
 const OLLAMA_NUM_PREDICT = Number(process.env.OLLAMA_NUM_PREDICT || 256);
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || '';
-const LLM_PROVIDER = String(
-  process.env.LLM_PROVIDER ||
-  process.env.AI_PROVIDER ||
-  (GOOGLE_API_KEY ? 'gemini' : 'ollama')
-).trim().toLowerCase();
-const GEMINI_API_URL = process.env.GEMINI_API_URL || 'https://generativelanguage.googleapis.com/v1beta';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'gemini-2.5-flash-lite';
-const GEMINI_NUM_PREDICT = Number(process.env.GEMINI_NUM_PREDICT || OLLAMA_NUM_PREDICT);
-const isGeminiProvider = LLM_PROVIDER === 'gemini' || LLM_PROVIDER === 'google';
-const ACTIVE_LLM_LABEL = isGeminiProvider ? GEMINI_MODEL : MODEL;
 const DB_AGENT_TIMEOUT_MS = Number(process.env.MCP_DB_AGENT_TIMEOUT_MS || 8000);
 const TABLE_ANSWER_LIMIT = Number(process.env.MCP_TABLE_ANSWER_LIMIT || 100);
 const LLM_PROMPT_ENHANCER_ENABLED = isTruthy(process.env.MCP_LLM_PROMPT_ENHANCER);
@@ -1381,68 +1370,6 @@ const isOllamaMemoryError = (error) => {
   return /requires more system memory|not enough memory|out of memory/i.test(detail);
 };
 
-const getGeminiText = (data = {}) => {
-  const parts = data.candidates?.[0]?.content?.parts || [];
-  return parts
-    .map((part) => (typeof part.text === 'string' ? part.text : ''))
-    .join('')
-    .trim();
-};
-
-const postToGemini = async (payload, axiosConfig = {}) => {
-  if (!GOOGLE_API_KEY) {
-    throw new Error('GOOGLE_API_KEY is required when LLM_PROVIDER=gemini.');
-  }
-
-  const payloadOptions = payload.options || {};
-  const generationConfig = {
-    temperature: Number.isFinite(Number(payloadOptions.temperature)) ? Number(payloadOptions.temperature) : 0,
-    maxOutputTokens: Number(payloadOptions.max_output_tokens || payloadOptions.maxOutputTokens || payloadOptions.num_predict || GEMINI_NUM_PREDICT)
-  };
-  if (payload.format === 'json') {
-    generationConfig.responseMimeType = 'application/json';
-  }
-
-  const request = {
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: String(payload.prompt || '') }]
-      }
-    ],
-    generationConfig
-  };
-  if (payload.system) {
-    request.systemInstruction = {
-      parts: [{ text: String(payload.system) }]
-    };
-  }
-
-  const modelPath = GEMINI_MODEL.startsWith('models/') ? GEMINI_MODEL : `models/${GEMINI_MODEL}`;
-  const url = `${GEMINI_API_URL}/${modelPath}:generateContent`;
-  const { headers = {}, ...restAxiosConfig } = axiosConfig || {};
-  const response = await axios.post(url, request, {
-    ...restAxiosConfig,
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': GOOGLE_API_KEY,
-      ...headers
-    }
-  });
-  const text = getGeminiText(response.data);
-  if (!text) {
-    const blockedReason = response.data?.promptFeedback?.blockReason;
-    throw new Error(blockedReason ? `Gemini blocked the request: ${blockedReason}.` : 'Gemini returned no text response.');
-  }
-  return {
-    data: {
-      response: text,
-      model: GEMINI_MODEL,
-      raw: response.data
-    }
-  };
-};
-
 const postToOllama = async (payload, axiosConfig = {}) => {
   const { options: payloadOptions = {}, ...requestPayload } = payload;
   try {
@@ -1463,13 +1390,6 @@ const postToOllama = async (payload, axiosConfig = {}) => {
       options: { ...ollamaOptions, ...payloadOptions }
     }, axiosConfig);
   }
-};
-
-const postToLlm = async (payload, axiosConfig = {}) => {
-  if (isGeminiProvider) {
-    return postToGemini(payload, axiosConfig);
-  }
-  return postToOllama(payload, axiosConfig);
 };
 
 const parseLooseJsonObject = (text = '') => {
@@ -1625,7 +1545,7 @@ Rewrite this as one clear database/document query. Prefer exact-match wording fo
   const controller = new AbortController();
   try {
     const response = await withTimeout(
-      postToLlm({
+      postToOllama({
         prompt,
         system,
         stream: false,
@@ -1675,7 +1595,7 @@ Rewrite this as one clear database/document query. Prefer exact-match wording fo
       changed: optimized !== promptRewrite.original,
       deterministicOptimized: promptRewrite.optimized,
       llmEnhanced: true,
-      llmModel: ACTIVE_LLM_LABEL,
+      llmModel: MODEL,
       enhanced,
       enhancerReason: typeof parsed?.reason === 'string' ? parsed.reason : undefined,
       enhancerKeywords: Array.isArray(parsed?.keywords) ? parsed.keywords.slice(0, 12) : undefined,
@@ -3063,7 +2983,7 @@ const answerWithLlmFromMongoExtraction = async ({ query, databaseLabel, sourceNa
 
   try {
     const response = await withTimeout(
-      postToLlm({
+      postToOllama({
         prompt: `User question: ${query}
 
 MongoDB extraction plan:
@@ -3192,7 +3112,7 @@ Return this exact mongo-extraction-v1 JSON shape:
 
   try {
     const response = await withTimeout(
-      postToLlm({
+      postToOllama({
         prompt,
         system,
         stream: false,
@@ -4257,7 +4177,7 @@ const buildMcpWorkflowTrace = ({ context = {}, result = {}, multiple = false } =
       stage: 'Plan',
       status: result.toolUsed ? 'completed' : 'not_required',
       action: 'Map the user question to a safe MCP tool call with structured arguments.',
-      planner: 'trusted extractor first, LLM planner only when needed'
+      planner: 'trusted extractor first, Llama planner only when needed'
     },
     {
       stage: 'Tool Call',
@@ -4422,9 +4342,9 @@ const processSingleQuery = async (query, context = {}) => {
     }
 
     // 1. Send query to LLM to determine intent/tool
-    console.log(`Sending query to ${LLM_PROVIDER} (${ACTIVE_LLM_LABEL}): "${query}"`);
+    console.log(`Sending query to Ollama (${MODEL}): "${query}"`);
     
-    const intentResponse = await postToLlm({
+    const intentResponse = await postToOllama({
       prompt: `User Query: "${query}"${contextInstructions(context)}\n\nBased on your instructions, output the JSON to call a tool, or respond normally if no tool is needed.`,
       system: systemPrompt,
       stream: false,
@@ -4468,7 +4388,7 @@ ${contextInstructions(context)}
 
 Please provide a helpful, natural language response to the user based on the tool result. Use the corrected prompt and keywords from the prompt layer. Keep it concise. If the tool returned an error, explain the error and what information or access is needed.`;
 
-      const finalResponse = await postToLlm({
+      const finalResponse = await postToOllama({
         prompt: finalPrompt,
         system: "You are a helpful database MCP assistant. Always format the final answer with short sections:\nAnswer\n- direct result\n\nDetails\n- source, matched rows, filters, or tool context\n\nNext\n- only include actions the user must take. Do not dump raw JSON unless the user asks for JSON. If rows are displayed in the UI table, summarize what the rows contain.",
         stream: false
