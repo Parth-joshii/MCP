@@ -93,7 +93,7 @@ const buildCustomers = () => customerNames.map((name, index) => {
     customer_name: name,
     email: `${name.toLowerCase().replace(/\s+/g, '.')}@example.com`,
     phone: `+91-${9000000000 + index * 137}`,
-    segment: choice(['Retail', 'Corporate', 'SMB', 'Enterprise']),
+    segment: choice(['Consumer', 'Corporate', 'SMB', 'Enterprise']),
     loyalty_tier: choice(['Bronze', 'Silver', 'Gold', 'Platinum']),
     signup_date: dateDaysAgo(900 - index * 9),
     status: index % 17 === 0 ? 'inactive' : 'active',
@@ -110,7 +110,7 @@ const buildProducts = () => productCatalog.map(([id, name, category, brand, unit
   cost_price: costPrice,
   stock_quantity: 35 + Math.floor(random() * 180),
   reorder_level: 20 + Math.floor(random() * 25),
-  supplier: choice(['NorthStar Supply', 'Metro Distributors', 'Prime Wholesale', 'RetailBridge']),
+  supplier: choice(['NorthStar Supply', 'Metro Distributors', 'Prime Wholesale', 'SupplyBridge']),
   status: index % 19 === 0 ? 'discontinued' : 'active'
 }));
 
@@ -120,7 +120,7 @@ const buildSalesData = (customers, products) => {
   const payments = [];
   const shipments = [];
   const returns = [];
-  const channels = ['online', 'retail_store', 'marketplace', 'partner'];
+  const channels = ['web', 'field_sales', 'marketplace', 'partner'];
   const paymentMethods = ['upi', 'card', 'net_banking', 'wallet', 'cash'];
   const carriers = ['BlueDart', 'Delhivery', 'Ekart', 'Shiprocket'];
   const reasons = ['damaged', 'late_delivery', 'wrong_item', 'size_issue', 'changed_mind'];
